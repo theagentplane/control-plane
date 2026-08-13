@@ -172,30 +172,155 @@ async function renderChronicle() {
   await search();
 }
 
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function parseMs(value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function fmtDur(ms) {
+  if (ms < 1) return "<1ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function spanTone(env) {
+  const kind = String(env.boundary_kind || env.kind || "").toLowerCase();
+  const name = String(env.node_id || env.name || "").toLowerCase();
+  if (kind === "llm" || name.includes("llm") || name.includes("chat") || name.includes("openai") || name.includes("anthropic")) return "llm";
+  if (kind === "tool" || name.includes("tool")) return "tool";
+  if (name.includes("auth")) return "auth";
+  if (name.includes("db") || name.includes("sql") || name.includes("store")) return "db";
+  if (name.includes("poll")) return "poll";
+  if (name.includes("pay") || name.includes("search") || name.includes("dispatch")) return "work";
+  return "span";
+}
+
+function spanInterval(env) {
+  const end = parseMs(env.timestamp) ?? parseMs(env.ended_at);
+  const start = parseMs(env.started_at) ?? end;
+  return { start, end };
+}
+
+function buildWaterfallRows(envs) {
+  const byId = new Map(envs.map((e) => [e.envelope_id, e]));
+  const children = new Map();
+  const roots = [];
+  envs.forEach((e) => {
+    const parent = e.parent_envelope_id || "";
+    if (parent && byId.has(parent)) {
+      const list = children.get(parent) || [];
+      list.push(e);
+      children.set(parent, list);
+    } else {
+      roots.push(e);
+    }
+  });
+  const sortSibs = (list) => list.sort((a, b) => {
+    const ia = spanInterval(a);
+    const ib = spanInterval(b);
+    return (ia.start ?? 0) - (ib.start ?? 0) || (a.sequence ?? 0) - (b.sequence ?? 0);
+  });
+  sortSibs(roots);
+  children.forEach((list) => sortSibs(list));
+
+  const intervals = new Map();
+  const uniqueStarts = new Set(
+    envs.map((e) => spanInterval(e).start).filter((v) => v != null)
+  );
+  const collapse = envs.length > 1 && uniqueStarts.size <= 1;
+  envs.forEach((e, i) => {
+    const { start, end } = spanInterval(e);
+    if (collapse || start == null) {
+      intervals.set(e.envelope_id, { start: i * 10, end: i * 10 + 8 });
+      return;
+    }
+    const resolvedEnd = end ?? start;
+    intervals.set(e.envelope_id, {
+      start,
+      end: resolvedEnd <= start ? start + 1 : resolvedEnd,
+    });
+  });
+
+  const enclose = (env) => {
+    let { start, end } = intervals.get(env.envelope_id);
+    (children.get(env.envelope_id) || []).forEach((child) => {
+      const inner = enclose(child);
+      if (inner.start < start) start = inner.start;
+      if (inner.end > end) end = inner.end;
+    });
+    intervals.set(env.envelope_id, { start, end });
+    return { start, end };
+  };
+  roots.forEach(enclose);
+
+  const times = [...intervals.values()];
+  let t0 = Math.min(...times.map((t) => t.start));
+  let t1 = Math.max(...times.map((t) => t.end));
+  if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) {
+    t0 = 0;
+    t1 = Math.max(envs.length, 1) * 10;
+    envs.forEach((e, i) => intervals.set(e.envelope_id, { start: i * 10, end: i * 10 + 8 }));
+  }
+  const total = t1 - t0;
+
+  const rows = [];
+  const walk = (list, depth) => {
+    list.forEach((env) => {
+      const { start, end } = intervals.get(env.envelope_id);
+      const left = ((start - t0) / total) * 100;
+      const width = Math.max(((end - start) / total) * 100, 0.8);
+      rows.push({ env, depth, left, width, dur: end - start });
+      walk(children.get(env.envelope_id) || [], depth + 1);
+    });
+  };
+  walk(roots, 0);
+  return { rows, total, t0, t1 };
+}
+
 async function showWaterfall(traceId) {
   const box = $("#c-water");
   box.innerHTML = "Loading waterfall…";
   try {
     const data = await api("/v1/traces/" + encodeURIComponent(traceId) + "/envelopes");
     const envs = data.envelopes || [];
-    const byParent = {};
-    envs.forEach((e) => {
-      const p = e.parent_envelope_id || "";
-      (byParent[p] ||= []).push(e);
-    });
-    function tree(parent, depth) {
-      return (byParent[parent] || []).map((e) => {
-        const name = e.node_id || e.name || e.envelope_id;
-        const kind = e.boundary_kind || "";
-        return `<li style="margin-left:${depth * 8}px">
-          <div><span class="mono">${name}</span> <span class="pill">${kind}</span></div>
-          <div class="meta">${e.envelope_id} · seq ${e.sequence ?? "—"}</div>
-          <ul class="waterfall">${tree(e.envelope_id, depth + 1)}</ul>
-        </li>`;
-      }).join("");
+    if (!envs.length) {
+      box.innerHTML = `<div class="card"><h2>Waterfall · ${esc(traceId)}</h2><p class="hint">No spans in this trace.</p></div>`;
+      return;
     }
-    box.innerHTML = `<div class="card"><h2>Waterfall · ${traceId}</h2>
-      <ul class="waterfall">${tree("", 0) || envs.map((e) => `<li><span class="mono">${e.node_id || e.envelope_id}</span></li>`).join("")}</ul>
+    const { rows, total } = buildWaterfallRows(envs);
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((p) => (
+      `<span class="wf-tick" style="left:${p * 100}%">${esc(fmtDur(total * p))}</span>`
+    )).join("");
+    const body = rows.map(({ env, depth, left, width, dur }) => {
+      const name = env.node_id || env.name || env.envelope_id;
+      const kind = env.boundary_kind || "";
+      const title = `${name}${kind ? " · " + kind : ""} · ${fmtDur(dur)} · ${env.envelope_id}`;
+      return `<div class="wf-row" style="padding-left:${12 + depth * 18}px">
+        <div class="wf-track">
+          <div class="wf-bar wf-${spanTone(env)}" style="left:${left}%;width:${width}%" title="${esc(title)}">
+            <span class="wf-bar-label">${esc(name)}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    box.innerHTML = `<div class="card wf-card">
+      <h2>Waterfall · ${esc(traceId)}</h2>
+      <p class="hint">${envs.length} spans · ${esc(fmtDur(total))}</p>
+      <div class="wf">
+        <div class="wf-axis">${ticks}</div>
+        ${body}
+      </div>
     </div>`;
   } catch (err) {
     box.innerHTML = `<p class="err">${err.message}</p>`;
