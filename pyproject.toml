@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentplane-control-plane"
+version = "0.1.0"
+description = "Shared AgentPlane control plane: Chronicle envelopes + TokenOps governance Admin/Dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "AgentPlane" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2",
+  "httpx>=0.27",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.32", "pandas>=2"]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "agentplane-control-plane[ui]"]
+
+[project.urls]
+Homepage = "https://github.com/theagentplane/control-plane"
+Repository = "https://github.com/theagentplane/control-plane"
+Issues = "https://github.com/theagentplane/control-plane/issues"
+
+[project.scripts]
+control-plane = "control_plane.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["control_plane"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+src = ["control_plane", "ui", "tests"]
