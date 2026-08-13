@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentPlane Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      const KEY = "agentplane-theme";
+      let theme = localStorage.getItem(KEY);
+      if (!theme) theme = "dark";
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/plane.css" />
+  <link rel="icon" href="/static/logo-mark.png" type="image/png" />
+</head>
+<body>
+  <nav class="site-nav" aria-label="Main">
+    <div class="container">
+      <a class="logo" href="#admin">
+        <img src="/static/logo-mark.png" alt="AgentPlane logo" class="logo-mark" width="32" height="32">
+        AgentPlane
+        <span class="logo-sub">Control</span>
+      </a>
+      <div class="nav-links">
+        <button type="button" class="theme-switch" id="theme-switch" role="switch" aria-checked="true" aria-label="Switch to light mode" title="Switch to light mode">
+          <span class="theme-switch-track">
+            <svg class="theme-switch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <span class="theme-switch-thumb"></span>
+            <svg class="theme-switch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </span>
+        </button>
+        <a class="tab active" href="#admin" data-tab="admin">Admin</a>
+        <a class="tab" href="#chronicle" data-tab="chronicle">Chronicle</a>
+        <a class="tab" href="#tokenops" data-tab="tokenops">TokenOps</a>
+      </div>
+    </div>
+  </nav>
+  <main class="main">
+    <section id="view-admin"></section>
+    <section id="view-chronicle" class="hidden"></section>
+    <section id="view-tokenops" class="hidden"></section>
+  </main>
+  <script src="/static/plane.js"></script>
+</body>
+</html>

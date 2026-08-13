@@ -10,11 +10,18 @@ from control_plane.models import (
     RunRecord,
     RunRegistration,
     Segment,
+    parse_governance_mode,
 )
 
 
 def registration_to_dict(reg: RunRegistration) -> dict[str, Any]:
-    return {"run_id": reg.run_id, "intent": reg.intent, "user_dims": dict(reg.user_dims)}
+    return {
+        "run_id": reg.run_id,
+        "intent": reg.intent,
+        "user_dims": dict(reg.user_dims),
+        "mode": reg.mode.value,
+        "status": "registered",
+    }
 
 
 def registration_from_dict(data: dict[str, Any]) -> RunRegistration:
@@ -22,6 +29,7 @@ def registration_from_dict(data: dict[str, Any]) -> RunRegistration:
         run_id=str(data["run_id"]),
         intent=str(data.get("intent", "")),
         user_dims={str(k): str(v) for k, v in (data.get("user_dims") or {}).items()},
+        mode=parse_governance_mode(data.get("mode")),
     )
 
 
@@ -104,6 +112,7 @@ def run_to_dict(rec: RunRecord) -> dict[str, Any]:
         "ended_at": rec.ended_at,
         "task": rec.task,
         "dims": dict(rec.dims),
+        "governance_events": list(rec.governance_events or []),
     }
 
 
@@ -122,4 +131,5 @@ def run_from_dict(data: dict[str, Any]) -> RunRecord:
         ended_at=data.get("ended_at"),
         task=data.get("task"),
         dims={str(k): str(v) for k, v in (data.get("dims") or {}).items()},
+        governance_events=list(data.get("governance_events") or []),
     )

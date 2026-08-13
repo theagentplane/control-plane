@@ -12,15 +12,19 @@ accumulators** (spend, inflight, halt). The key method is
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import sqlite3
+import threading
 import time
 import uuid
 from typing import Sequence
 
 from control_plane.templates import POLICY_TEMPLATES as _TEMPLATES
 from control_plane.models import (
+    ApiKeyView,
     BudgetSpec,
     PolicyInstance,
     RunAlreadyRegisteredError,
@@ -28,6 +32,7 @@ from control_plane.models import (
     RunRecord,
     RunRegistration,
     Segment,
+    parse_governance_mode,
 )
 
 _SCHEMA = """
@@ -48,13 +53,25 @@ CREATE TABLE IF NOT EXISTS runs (
   parent_run TEXT, halt_reason TEXT, detector TEXT,
   cost_micros INTEGER NOT NULL DEFAULT 0, steps INTEGER NOT NULL DEFAULT 0,
   started_at REAL NOT NULL DEFAULT 0, ended_at REAL,
-  task TEXT, dims TEXT NOT NULL DEFAULT '{}'
+  task TEXT, dims TEXT NOT NULL DEFAULT '{}',
+  governance_events TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS run_registrations (
   run_id TEXT PRIMARY KEY,
   intent TEXT NOT NULL DEFAULT '',
   user_dims TEXT NOT NULL DEFAULT '{}',
+  mode TEXT NOT NULL DEFAULT 'enforce',
   registered_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  scopes TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'ui',
+  created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ledger_spent (
   budget_id TEXT NOT NULL,
@@ -80,12 +97,14 @@ def new_id(prefix: str) -> str:
 
 
 class SqliteStore:
-    def __init__(self, path: str = "tokenops.db", *, auto_seed: bool = True) -> None:
+    def __init__(self, path: str = "control_plane.db", *, auto_seed: bool = True) -> None:
         self.path = path
+        self._lock = threading.RLock()
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
+        self._db.execute("PRAGMA busy_timeout=5000")
         self._db.executescript(_SCHEMA)
         self._migrate()
         self._db.commit()
@@ -93,12 +112,20 @@ class SqliteStore:
             self.seed_default_governance_if_empty()
 
     def _migrate(self) -> None:
-        # Additive migrations for pre-existing databases.
         cols = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "dims" not in cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN dims TEXT NOT NULL DEFAULT '{}'")
         if "parent_span" not in cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN parent_span TEXT")
+        if "governance_events" not in cols:
+            self._db.execute(
+                "ALTER TABLE runs ADD COLUMN governance_events TEXT NOT NULL DEFAULT '[]'"
+            )
+        reg_cols = {row[1] for row in self._db.execute("PRAGMA table_info(run_registrations)")}
+        if "mode" not in reg_cols:
+            self._db.execute(
+                "ALTER TABLE run_registrations ADD COLUMN mode TEXT NOT NULL DEFAULT 'enforce'"
+            )
 
     def close(self) -> None:
         self._db.close()
@@ -240,10 +267,20 @@ class SqliteStore:
         if self.get_run_registration(reg.run_id) is not None:
             raise RunAlreadyRegisteredError(f"run {reg.run_id!r} is already registered")
         self._db.execute(
-            "INSERT INTO run_registrations(run_id, intent, user_dims, registered_at) VALUES (?,?,?,?)",
-            (reg.run_id, reg.intent, json.dumps(reg.user_dims), time.time()),
+            "INSERT INTO run_registrations(run_id, intent, user_dims, mode, registered_at) "
+            "VALUES (?,?,?,?,?)",
+            (reg.run_id, reg.intent, json.dumps(reg.user_dims), reg.mode.value, time.time()),
         )
-        self._db.commit()
+        agent = reg.intent or "agent"
+        self.create_run(
+            RunRecord(
+                run_id=reg.run_id,
+                agent=agent,
+                status="running",
+                dims=dict(reg.user_dims),
+                task=reg.intent or None,
+            )
+        )
         return reg
 
     def resolve_run(self, run_id: str) -> RunRegistration:
@@ -292,11 +329,11 @@ class SqliteStore:
             rec.started_at = time.time()
         self._db.execute(
             "REPLACE INTO runs(run_id, agent, status, parent_run, parent_span, halt_reason, detector, "
-            "cost_micros, steps, started_at, ended_at, task, dims) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "cost_micros, steps, started_at, ended_at, task, dims, governance_events) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (rec.run_id, rec.agent, rec.status, rec.parent_run, rec.parent_span, rec.halt_reason,
              rec.detector, rec.cost_micros, rec.steps, rec.started_at, rec.ended_at, rec.task,
-             json.dumps(rec.dims)),
+             json.dumps(rec.dims), json.dumps(rec.governance_events)),
         )
         self._db.commit()
         return rec
@@ -304,6 +341,10 @@ class SqliteStore:
     def update_run(self, run_id: str, **fields) -> None:
         if not fields:
             return
+        if "governance_events" in fields and not isinstance(fields["governance_events"], str):
+            fields["governance_events"] = json.dumps(fields["governance_events"])
+        if "dims" in fields and not isinstance(fields["dims"], str):
+            fields["dims"] = json.dumps(fields["dims"])
         cols = ", ".join(f"{k}=?" for k in fields)
         self._db.execute(f"UPDATE runs SET {cols} WHERE run_id=?", (*fields.values(), run_id))
         self._db.commit()
@@ -392,6 +433,10 @@ class SqliteStore:
             "halt_reason=COALESCE(excluded.halt_reason, ledger_halt.halt_reason)",
             (run_id, reason or None),
         )
+        self._db.execute(
+            "UPDATE runs SET status='halted', halt_reason=? WHERE run_id=?",
+            (reason or None, run_id),
+        )
         self._db.commit()
 
     def ledger_is_halted(self, run_id: str) -> bool:
@@ -414,6 +459,71 @@ class SqliteStore:
         )
         self._db.commit()
 
+    def create_api_key(
+        self,
+        *,
+        name: str,
+        tenant_id: str,
+        scopes: Sequence[str],
+        secret: str | None = None,
+        source: str = "ui",
+    ) -> ApiKeyView:
+        token = secret or secrets.token_urlsafe(24)
+        kid = new_id("key")
+        prefix = token[:8]
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        now = time.time()
+        self._db.execute(
+            "INSERT INTO api_keys(id, name, key_hash, key_prefix, tenant_id, scopes, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (kid, name, digest, prefix, tenant_id, "+".join(scopes), source, now),
+        )
+        self._db.commit()
+        return ApiKeyView(
+            id=kid,
+            name=name,
+            key_prefix=prefix,
+            tenant_id=tenant_id,
+            scopes=list(scopes),
+            source=source,
+            created_at=now,
+            secret=token,
+        )
+
+    def list_api_keys(self) -> list[ApiKeyView]:
+        rows = self._db.execute("SELECT * FROM api_keys ORDER BY created_at DESC").fetchall()
+        return [
+            ApiKeyView(
+                id=r["id"],
+                name=r["name"],
+                key_prefix=r["key_prefix"],
+                tenant_id=r["tenant_id"],
+                scopes=str(r["scopes"]).split("+"),
+                source=r["source"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    def lookup_api_key(self, token: str) -> ApiKeyView | None:
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        row = self._db.execute("SELECT * FROM api_keys WHERE key_hash=?", (digest,)).fetchone()
+        if row is None:
+            return None
+        return ApiKeyView(
+            id=row["id"],
+            name=row["name"],
+            key_prefix=row["key_prefix"],
+            tenant_id=row["tenant_id"],
+            scopes=str(row["scopes"]).split("+"),
+            source=row["source"],
+            created_at=row["created_at"],
+        )
+
+    def delete_api_key(self, kid: str) -> None:
+        self._db.execute("DELETE FROM api_keys WHERE id=?", (kid,))
+        self._db.commit()
+
 
 # ---- row -> model ---------------------------------------------------------- #
 
@@ -422,6 +532,7 @@ def _registration(r: sqlite3.Row) -> RunRegistration:
         run_id=r["run_id"],
         intent=r["intent"] or "",
         user_dims=json.loads(r["user_dims"] or "{}"),
+        mode=parse_governance_mode(r["mode"] if "mode" in r.keys() else None),
     )
 
 
@@ -451,13 +562,20 @@ def _policy(r: sqlite3.Row) -> PolicyInstance:
 def _run(r: sqlite3.Row) -> RunRecord:
     dims = json.loads((r["dims"] if "dims" in r.keys() else None) or "{}")
     keys = r.keys()
+    gov_raw = r["governance_events"] if "governance_events" in keys else "[]"
+    try:
+        governance_events = json.loads(gov_raw or "[]")
+    except json.JSONDecodeError:
+        governance_events = []
     return RunRecord(
         run_id=r["run_id"], agent=r["agent"], status=r["status"],
         parent_run=r["parent_run"],
         parent_span=r["parent_span"] if "parent_span" in keys else None,
         halt_reason=r["halt_reason"], detector=r["detector"],
-        cost_micros=r["cost_micros"], steps=r["steps"], started_at=r["started_at"],
+        cost_micros=r["cost_micros"], steps=r["steps"],
+        started_at=r["started_at"],
         ended_at=r["ended_at"], task=r["task"], dims=dims,
+        governance_events=governance_events,
     )
 
 
