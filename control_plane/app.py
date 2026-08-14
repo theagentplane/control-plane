@@ -13,9 +13,9 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from control_plane.auth import Principal, parse_api_keys, require_scopes
+from control_plane.auth import Principal, env_key_views, parse_api_keys, require_scopes
 from control_plane.envelope_store import EnvelopeStore
-from control_plane.models import RunAlreadyRegisteredError
+from control_plane.models import RunAlreadyRegisteredError, parse_governance_mode
 from control_plane.serde import (
     budget_from_dict,
     budget_to_dict,
@@ -42,11 +42,20 @@ def create_app(
     env_store = envelopes or EnvelopeStore(cfg.db_path)
     owns = store is None
 
-    app = FastAPI(title="agentplane-control-plane", version=cfg.version)
+    app = FastAPI(
+        title="agentplane-control-plane",
+        version=cfg.version,
+        description="SQLite-backed AgentPlane control plane. Callers: agent-chronicle, "
+        "agent-tokenops, ui. See docs/DESIGN.md.",
+    )
     app.state.settings = cfg
     app.state.api_keys = parse_api_keys(cfg.api_keys)
     app.state.store = gov
     app.state.envelopes = env_store
+
+    from control_plane.web import mount_web
+
+    mount_web(app)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -71,36 +80,14 @@ def create_app(
         # queued: v1 acks after SQLite commit (same as sync) — placeholder for real queue
         return header
 
-    # ---- Chronicle envelopes ---------------------------------------------- #
+    # ---- Chronicle envelopes (agent ingest = batch only) ------------------ #
 
-    @app.post("/v1/envelopes")
-    @app.post("/envelopes")  # legacy alias
-    async def ingest_envelope(
-        request: Request,
-        principal: Principal = Depends(require_scopes("ingest")),
-    ) -> JSONResponse:
-        if int(request.headers.get("content-length") or 0) > cfg.max_body_bytes:
-            raise HTTPException(status_code=413, detail="payload too large")
-        body = await request.json()
-        durability = _durability(request)
-        try:
-            deduped, meta = env_store.append(principal.tenant_id, body)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        payload = {
-            "status": "stored",
-            "envelope_id": meta["envelope_id"],
-            "trace_id": meta["trace_id"],
-            "durability": durability,
-            "deduped": deduped,
-        }
-        return JSONResponse(payload, status_code=200 if deduped else 201)
-
-    @app.post("/v1/envelopes:batch")
+    @app.post("/v1/envelopes:batch", tags=["agent-chronicle"])
     async def ingest_batch(
         request: Request,
         principal: Principal = Depends(require_scopes("ingest")),
     ) -> JSONResponse:
+        """Caller: Chronicle sidecar. Only ingest API. batch_size=1 is immediate flush."""
         if int(request.headers.get("content-length") or 0) > cfg.max_body_bytes:
             raise HTTPException(status_code=413, detail="payload too large")
         payload = await request.json()
@@ -125,49 +112,46 @@ def create_app(
             status_code=201,
         )
 
-    @app.get("/v1/envelopes/{envelope_id}")
-    async def get_envelope(
-        envelope_id: str,
-        principal: Principal = Depends(require_scopes("read")),
-    ) -> dict[str, Any]:
-        env = env_store.get_envelope(principal.tenant_id, envelope_id)
-        if env is None:
-            raise HTTPException(status_code=404, detail="not found")
-        return {"envelope": env}
-
-    @app.get("/v1/traces/{trace_id}")
+    @app.get("/v1/traces/{trace_id}", tags=["agent-chronicle", "ui"])
     async def get_trace(
         trace_id: str,
         principal: Principal = Depends(require_scopes("read")),
     ) -> dict[str, Any]:
+        """Caller: Chronicle sidecar (replay) or Chronicle UI."""
         tr = env_store.get_trace(principal.tenant_id, trace_id)
         if tr is None:
             raise HTTPException(status_code=404, detail="not found")
         return tr
 
-    @app.get("/v1/traces/{trace_id}/envelopes")
+    @app.get("/v1/traces/{trace_id}/envelopes", tags=["agent-chronicle", "ui"])
     async def list_trace_envelopes(
         trace_id: str,
         principal: Principal = Depends(require_scopes("read")),
     ) -> dict[str, Any]:
+        """Caller: Chronicle sidecar (full fixture for mocks) or Chronicle UI waterfall."""
         return {"envelopes": env_store.list_trace_envelopes(principal.tenant_id, trace_id)}
 
-    @app.get("/v1/traces")
+    @app.get("/v1/traces", tags=["ui"])
     async def find_traces(
+        q: str | None = None,
         session_id: str | None = None,
         message_id: str | None = None,
         user_id: str | None = None,
-        limit: int = 50,
+        limit: int = 200,
+        offset: int = 0,
         principal: Principal = Depends(require_scopes("read")),
     ) -> dict[str, Any]:
-        traces = env_store.find_traces(
+        """Caller: Chronicle UI — search / filter traces. Not used by the agent sidecar."""
+        traces = env_store.search_traces(
             principal.tenant_id,
+            q=q,
             session_id=session_id,
             message_id=message_id,
             user_id=user_id,
-            limit=min(limit, 200),
+            limit=min(limit, 500),
+            offset=max(offset, 0),
         )
-        return {"traces": traces, "next_cursor": None}
+        return {"traces": traces}
 
     # ---- TokenOps registration -------------------------------------------- #
 
@@ -178,11 +162,16 @@ def create_app(
     ) -> JSONResponse:
         payload = await request.json()
         run_id = str(payload.get("run_id") or "").strip() or new_id("run")
+        try:
+            mode = parse_governance_mode(payload.get("mode") or payload.get("governance_mode"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         reg = registration_from_dict(
             {
                 "run_id": run_id,
                 "intent": payload.get("intent", ""),
                 "user_dims": payload.get("user_dims") or {},
+                "mode": mode.value,
             }
         )
         try:
@@ -190,7 +179,16 @@ def create_app(
         except RunAlreadyRegisteredError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         # Chronicle session coupling intentionally omitted — agents own their traces.
-        return JSONResponse(registration_to_dict(saved), status_code=201)
+        return JSONResponse(
+            {
+                "run_id": saved.run_id,
+                "status": "registered",
+                "mode": saved.mode.value,
+                "intent": saved.intent,
+                "user_dims": dict(saved.user_dims),
+            },
+            status_code=201,
+        )
 
     @app.get("/v1/runs/{run_id}/registration")
     async def get_registration(
@@ -452,6 +450,43 @@ def create_app(
         body = await request.json()
         seeded = gov.reseed_governance(body.get("governance"))
         return {"seeded": seeded}
+
+    # ---- API keys (Admin UI) ---------------------------------------------- #
+
+    @app.get("/v1/admin/keys", tags=["ui"])
+    async def list_keys(principal: Principal = Depends(require_scopes("admin"))) -> dict[str, Any]:
+        """Caller: Admin UI. Env keys include the secret (already on the host). DB keys show prefix only."""
+        db_keys = [k.__dict__ for k in gov.list_api_keys()]
+        env_keys = [k.__dict__ for k in env_key_views(cfg.api_keys)]
+        return {"keys": env_keys + db_keys, "auth_disabled": not cfg.api_keys and not gov.list_api_keys()}
+
+    @app.post("/v1/admin/keys", tags=["ui"])
+    async def create_key(
+        request: Request,
+        principal: Principal = Depends(require_scopes("admin")),
+    ) -> dict[str, Any]:
+        """Caller: Admin UI. Secret is returned once."""
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        tenant = str(body.get("tenant_id") or "local").strip()
+        scopes = body.get("scopes") or ["ingest", "read"]
+        if isinstance(scopes, str):
+            scopes = [s for s in scopes.replace("+", ",").split(",") if s.strip()]
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        created = gov.create_api_key(name=name, tenant_id=tenant, scopes=scopes)
+        return created.__dict__
+
+    @app.delete("/v1/admin/keys/{kid}", tags=["ui"])
+    async def delete_key(
+        kid: str,
+        principal: Principal = Depends(require_scopes("admin")),
+    ) -> dict[str, str]:
+        """Caller: Admin UI. Env keys cannot be deleted here."""
+        if kid.startswith("env:"):
+            raise HTTPException(status_code=400, detail="env keys are removed by unsetting CONTROL_PLANE_API_KEYS")
+        gov.delete_api_key(kid)
+        return {"status": "deleted"}
 
     return app
 

@@ -33,14 +33,9 @@ def main() -> None:
             reload=args.reload,
         )
     elif args.cmd == "ui":
-        import subprocess
-        import sys
-        from pathlib import Path
-
-        app_path = Path(__file__).resolve().parent.parent / "ui" / "app.py"
-        subprocess.check_call(
-            [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(args.port)]
-        )
+        print("UI is served with the API. Run: control-plane serve --port 8800")
+        print("Then open http://127.0.0.1:8800/")
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

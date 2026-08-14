@@ -190,7 +190,8 @@ class EnvelopeStore:
             args.append(user_id)
         where = " AND ".join(clauses)
         rows = self._db.execute(
-            f"SELECT * FROM traces WHERE {where} ORDER BY ended_at DESC LIMIT ?",
+            f"SELECT * FROM traces WHERE {where} "
+            "ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC LIMIT ?",
             (*args, limit),
         ).fetchall()
         return [
@@ -202,3 +203,52 @@ class EnvelopeStore:
             }
             for r in rows
         ]
+
+    def search_traces(
+        self,
+        tenant_id: str,
+        *,
+        q: str | None = None,
+        session_id: str | None = None,
+        message_id: str | None = None,
+        user_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        clauses = ["tenant_id=?"]
+        args: list[Any] = [tenant_id]
+        if session_id:
+            clauses.append("json_extract(dims, '$.session_id')=?")
+            args.append(session_id)
+        if message_id:
+            clauses.append("json_extract(dims, '$.message_id')=?")
+            args.append(message_id)
+        if user_id:
+            clauses.append("json_extract(dims, '$.user_id')=?")
+            args.append(user_id)
+        if q:
+            clauses.append("(trace_id LIKE ? OR dims LIKE ?)")
+            like = f"%{q}%"
+            args.extend([like, like])
+        where = " AND ".join(clauses)
+        rows = self._db.execute(
+            f"SELECT * FROM traces WHERE {where} "
+            "ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC LIMIT ? OFFSET ?",
+            (*args, limit, offset),
+        ).fetchall()
+        out = []
+        for r in rows:
+            count = self._db.execute(
+                "SELECT COUNT(*) AS n FROM envelopes WHERE tenant_id=? AND trace_id=?",
+                (tenant_id, r["trace_id"]),
+            ).fetchone()["n"]
+            out.append(
+                {
+                    "trace_id": r["trace_id"],
+                    "dims": json.loads(r["dims"] or "{}"),
+                    "started_at": r["started_at"],
+                    "ended_at": r["ended_at"],
+                    "span_count": count,
+                }
+            )
+        return out
