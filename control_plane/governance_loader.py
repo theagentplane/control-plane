@@ -7,7 +7,8 @@ from pathlib import Path
 
 import yaml
 
-# Repo-root config/default.yaml (package sibling ../config)
+# Packaged copy (wheel) then repo-root config/default.yaml (editable checkout)
+_PKG_DEFAULT = Path(__file__).resolve().parent / "default.yaml"
 _REPO_DEFAULT = Path(__file__).resolve().parent.parent / "config" / "default.yaml"
 
 
@@ -15,6 +16,8 @@ def _default_path() -> Path:
     env = os.environ.get("CONTROL_PLANE_CONFIG") or os.environ.get("TOKENOPS_CONFIG")
     if env:
         return Path(env)
+    if _PKG_DEFAULT.exists():
+        return _PKG_DEFAULT
     return _REPO_DEFAULT
 
 

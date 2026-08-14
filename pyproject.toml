@@ -1,15 +1,38 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "agentplane-control-plane"
 version = "0.1.0"
-description = "Shared AgentPlane control plane: Chronicle envelopes + TokenOps governance Admin/Dashboard."
+description = "Shared AgentPlane control plane: Chronicle envelopes + TokenOps governance over HTTP."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "AgentPlane" }]
+license-files = ["LICENSE"]
+authors = [
+  { name = "Susheem Koul" },
+  { name = "Tisha Chawla" },
+]
+keywords = [
+  "llm",
+  "agents",
+  "control-plane",
+  "observability",
+  "governance",
+  "chronicle",
+  "tokenops",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Systems Administration",
+]
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
@@ -21,12 +44,19 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.32", "pandas>=2"]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "agentplane-control-plane[ui]"]
+dev = [
+  "pytest>=8",
+  "httpx>=0.27",
+  "ruff==0.15.22",
+  "build>=1.2",
+  "twine>=6",
+]
 
 [project.urls]
 Homepage = "https://github.com/theagentplane/control-plane"
 Repository = "https://github.com/theagentplane/control-plane"
 Issues = "https://github.com/theagentplane/control-plane/issues"
+Changelog = "https://github.com/theagentplane/control-plane/blob/main/CHANGELOG.md"
 
 [project.scripts]
 control-plane = "control_plane.cli:main"
@@ -35,8 +65,7 @@ control-plane = "control_plane.cli:main"
 packages = ["control_plane"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"control_plane/web" = "control_plane/web"
-"config/default.yaml" = "config/default.yaml"
+"config/default.yaml" = "control_plane/default.yaml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -44,4 +73,4 @@ pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
-src = ["control_plane", "ui", "tests"]
+src = ["control_plane", "tests"]

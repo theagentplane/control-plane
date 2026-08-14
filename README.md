@@ -5,7 +5,14 @@ Shared HTTP control plane for **Chronicle** and **TokenOps**. SQLite lives
 
 Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Issue: [#2](https://github.com/theagentplane/control-plane/issues/2)
 
-## Quick start
+## Install
+
+```bash
+pip install agentplane-control-plane
+control-plane serve --port 8800 --db control_plane.db
+```
+
+From a clone:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
