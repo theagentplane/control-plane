@@ -89,11 +89,38 @@ CREATE TABLE IF NOT EXISTS ledger_halt (
   halted INTEGER NOT NULL DEFAULT 0,
   halt_reason TEXT
 );
+CREATE TABLE IF NOT EXISTS ledger_events (
+  tenant_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  applied_at REAL NOT NULL,
+  PRIMARY KEY (tenant_id, idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS run_state (
+  tenant_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  step_count INTEGER NOT NULL DEFAULT 0,
+  window_json TEXT NOT NULL DEFAULT '[]',
+  velocity_micros_per_step REAL NOT NULL DEFAULT 0,
+  last_ts REAL,
+  PRIMARY KEY (tenant_id, run_id)
+);
 """
+
+#: Bound on the per-run BoundaryStep ring kept in ``run_state.window_json``.
+RUN_STATE_WINDOW = 64
 
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+def _velocity_from_window(window: list[dict]) -> float:
+    """micros/step over the ring: (newest cum_spent - oldest cum_spent) / span."""
+    if len(window) < 2:
+        return 0.0
+    newest = window[-1].get("cum_spent_micros") or 0
+    oldest = window[0].get("cum_spent_micros") or 0
+    return (newest - oldest) / (len(window) - 1)
 
 
 class SqliteStore:
@@ -458,6 +485,174 @@ class SqliteStore:
             (run_id,),
         )
         self._db.commit()
+
+    # ---- batched ledger events (contract §5) ----------------------------- #
+
+    def apply_events(self, tenant_id: str, events: list[dict]) -> dict:
+        """Apply a batch of LedgerEvents in array order, in one transaction.
+
+        Returns ``{accepted, deduped, atomic, totals, halted}``. ``totals`` is the
+        post-commit ``spent_micros`` for every ``(budget_id, segment_key, period)``
+        touched by a ``spent_add`` in this batch. Idempotency: a replayed
+        ``idempotency_key`` (per tenant) is counted in ``deduped`` and not re-applied.
+        """
+        accepted = 0
+        deduped = 0
+        touched: set[tuple[str, str, str]] = set()
+        run_ids: set[str] = set()
+        now = time.time()
+
+        with self._lock:
+            # sqlite3 (isolation_level="") auto-opens a transaction on the first DML;
+            # commit()/rollback() below bound it. No explicit BEGIN (would nest).
+            try:
+                for i, ev in enumerate(events):
+                    kind = ev.get("kind")
+                    key = str(ev.get("idempotency_key") or "").strip()
+                    if not key:
+                        raise ValueError(f"event {i} missing idempotency_key")
+                    seen = self._db.execute(
+                        "SELECT 1 FROM ledger_events WHERE tenant_id=? AND idempotency_key=?",
+                        (tenant_id, key),
+                    ).fetchone()
+                    if seen:
+                        deduped += 1
+                        continue
+                    self._apply_one(tenant_id, kind, ev, touched, run_ids)
+                    self._db.execute(
+                        "INSERT INTO ledger_events(tenant_id, idempotency_key, applied_at) "
+                        "VALUES (?,?,?)",
+                        (tenant_id, key, now),
+                    )
+                    accepted += 1
+                self._db.commit()
+
+                totals = {
+                    f"{b}|{s}|{p}": self.ledger_get_spent(b, s, p)
+                    for (b, s, p) in sorted(touched)
+                }
+                halted = any(self.ledger_is_halted(r) for r in run_ids)
+            except Exception:
+                self._db.rollback()
+                raise
+
+        return {
+            "accepted": accepted,
+            "deduped": deduped,
+            "atomic": True,
+            "totals": totals,
+            "halted": halted,
+        }
+
+    def _apply_one(
+        self,
+        tenant_id: str,
+        kind: str | None,
+        ev: dict,
+        touched: set[tuple[str, str, str]],
+        run_ids: set[str],
+    ) -> None:
+        """Apply a single event inside the open transaction. Raw SQL only — the public
+        ``ledger_*`` helpers commit, which we must not do mid-batch."""
+        run_id = str(ev.get("run_id") or "")
+        if run_id:
+            run_ids.add(run_id)
+
+        if kind == "spent_add":
+            delta = int(ev.get("delta_micros", 0))
+            for t in ev.get("targets") or []:
+                b = str(t["budget_id"])
+                s = str(t["segment_key"])
+                p = str(t.get("period", "lifetime"))
+                self._db.execute(
+                    "INSERT INTO ledger_spent(budget_id, segment_key, period, spent_micros) "
+                    "VALUES (?,?,?,?) ON CONFLICT(budget_id, segment_key, period) "
+                    "DO UPDATE SET spent_micros = spent_micros + excluded.spent_micros",
+                    (b, s, p, delta),
+                )
+                touched.add((b, s, p))
+
+        elif kind == "admit":
+            self._db.execute(
+                "INSERT INTO ledger_inflight(segment_key, count) VALUES (?, 1) "
+                "ON CONFLICT(segment_key) DO UPDATE SET count = count + 1",
+                (str(ev["segment_key"]),),
+            )
+
+        elif kind == "complete":
+            self._db.execute(
+                "UPDATE ledger_inflight SET count = MAX(0, count - 1) WHERE segment_key=?",
+                (str(ev["segment_key"]),),
+            )
+
+        elif kind == "step":
+            self._apply_step(tenant_id, run_id, ev)
+
+        elif kind == "halt_mark":
+            reason = ev.get("reason") or None
+            self._db.execute(
+                "INSERT INTO ledger_halt(run_id, halted, halt_reason) VALUES (?, 1, ?) "
+                "ON CONFLICT(run_id) DO UPDATE SET halted=1, "
+                "halt_reason=COALESCE(excluded.halt_reason, ledger_halt.halt_reason)",
+                (run_id, reason),
+            )
+            self._db.execute(
+                "UPDATE runs SET status='halted', halt_reason=? WHERE run_id=?",
+                (reason, run_id),
+            )
+
+        elif kind == "halt_clear":
+            self._db.execute(
+                "INSERT INTO ledger_halt(run_id, halted, halt_reason) VALUES (?, 0, NULL) "
+                "ON CONFLICT(run_id) DO UPDATE SET halted=0, halt_reason=NULL",
+                (run_id,),
+            )
+
+        else:
+            raise ValueError(f"unknown event kind {kind!r}")
+
+    def _apply_step(self, tenant_id: str, run_id: str, ev: dict) -> None:
+        row = self._db.execute(
+            "SELECT step_count, window_json FROM run_state WHERE tenant_id=? AND run_id=?",
+            (tenant_id, run_id),
+        ).fetchone()
+        window = json.loads(row["window_json"]) if row else []
+        step_entry = {
+            k: ev.get(k)
+            for k in (
+                "agent", "seq", "node_type", "boundary_id",
+                "cost_micros", "cum_spent_micros", "usage", "tags",
+                "tool_signature", "result_hash", "ts",
+            )
+            if ev.get(k) is not None
+        }
+        window.append(step_entry)
+        window = window[-RUN_STATE_WINDOW:]
+        step_count = (row["step_count"] if row else 0) + 1
+        velocity = _velocity_from_window(window)
+        self._db.execute(
+            "INSERT INTO run_state(tenant_id, run_id, step_count, window_json, "
+            "velocity_micros_per_step, last_ts) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(tenant_id, run_id) DO UPDATE SET "
+            "step_count=excluded.step_count, window_json=excluded.window_json, "
+            "velocity_micros_per_step=excluded.velocity_micros_per_step, last_ts=excluded.last_ts",
+            (tenant_id, run_id, step_count, json.dumps(window), velocity, ev.get("ts")),
+        )
+
+    def get_run_state(self, tenant_id: str, run_id: str) -> dict | None:
+        row = self._db.execute(
+            "SELECT step_count, window_json, velocity_micros_per_step, last_ts "
+            "FROM run_state WHERE tenant_id=? AND run_id=?",
+            (tenant_id, run_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "step_count": row["step_count"],
+            "recent": json.loads(row["window_json"]),
+            "velocity_micros_per_step": row["velocity_micros_per_step"],
+            "last_ts": row["last_ts"],
+        }
 
     def create_api_key(
         self,

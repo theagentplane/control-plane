@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 0.2.0 (in progress) — TokenOps remote-only (#10)
+
+- Wire contract: `docs/api-contract.md`.
+- `POST /v1/ledger/events:batch` — batched ledger writes (`spent_add` with multi-target
+  fan-out, `admit`/`complete`, `step`, `halt_mark`/`halt_clear`), applied in array order
+  in one transaction, idempotent per `idempotency_key` (`ledger_events` table).
+- `run_state` table — per-run `step_count` / bounded window / velocity, fed by `step`
+  events; `SqliteStore.get_run_state`.
+
 ## [0.1.0] — 2026-08-14
 
 - First PyPI release of the shared AgentPlane control plane.

@@ -421,6 +421,31 @@ def create_app(
         gov.ledger_clear_halt(body["run_id"])
         return {"status": "cleared"}
 
+    @app.post("/v1/ledger/events:batch", tags=["agent-tokenops"])
+    async def ledger_events_batch(
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> JSONResponse:
+        """Caller: TokenOps sidecar. Batched ledger writes — contract §5.
+
+        ``Durability: sync|queued`` header (queued == sync in 0.2.0). Applied in array
+        order, one transaction. Idempotent per ``idempotency_key`` (per tenant).
+        """
+        if int(request.headers.get("content-length") or 0) > cfg.max_body_bytes:
+            raise HTTPException(status_code=413, detail="payload too large")
+        _durability(request)  # validates the header (sync|queued)
+        payload = await request.json()
+        events = payload.get("events") if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            raise HTTPException(status_code=400, detail="expected {events: [...]}")
+        if len(events) > cfg.max_batch:
+            raise HTTPException(status_code=400, detail=f"batch max {cfg.max_batch}")
+        try:
+            result = gov.apply_events(principal.tenant_id, events)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
     # ---- admin ------------------------------------------------------------ #
 
     @app.post("/v1/admin/seed-if-empty")
