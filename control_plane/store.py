@@ -511,6 +511,16 @@ class SqliteStore:
                     key = str(ev.get("idempotency_key") or "").strip()
                     if not key:
                         raise ValueError(f"event {i} missing idempotency_key")
+                    # Record which accumulators this batch references *before* the dedup
+                    # check, so a fully-deduped batch still gets current totals in the ack.
+                    if kind == "spent_add":
+                        for t in ev.get("targets") or []:
+                            touched.add(
+                                (str(t["budget_id"]), str(t["segment_key"]),
+                                 str(t.get("period", "lifetime")))
+                            )
+                    if ev.get("run_id"):
+                        run_ids.add(str(ev["run_id"]))
                     seen = self._db.execute(
                         "SELECT 1 FROM ledger_events WHERE tenant_id=? AND idempotency_key=?",
                         (tenant_id, key),
