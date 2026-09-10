@@ -197,8 +197,28 @@ The plane is early (0.x). Near-term:
 
 Ideas welcome via GitHub issues.
 
+## Compatibility
+
+| agentplane-control-plane | tokenops | agent-chronicle | notes |
+|---|---|---|---|
+| 0.1.x | ≤ 0.2.1 | ≥ 0.3.0 | single-op `/v1/ledger/*`, `PUT /v1/run-records` |
+| **0.2.x** | ≤ 0.2.1 **and** `<next>` | ≥ 0.3.0 | **additive** — old clients keep working; adds `precheck` / `events:batch`, `run_state`, `data_scope` |
+| 0.3.x | `<next>`+ only | ≥ 0.3.0 | breaking — drops `run_registrations`, `PUT /v1/run-records`, legacy ledger wrappers |
+
+### Breaking changes
+
+- **0.2.0 → 0.3.0:** `run_registrations` folded into `runs` and dropped;
+  `PUT /v1/run-records` (`create_run`) removed; `PATCH /v1/run-records` rejects
+  `steps` / `cost_micros` (0.2.x only ignores them); legacy `/v1/ledger/halt/*` and
+  single-op `/v1/ledger/{spent,inflight}/*` writes removed. Runs as an automatic
+  `PRAGMA user_version` v3 migration. Released only after `tokenops <next>` stops
+  calling `create_run`.
+
+Full contract: [`docs/api-contract.md`](docs/api-contract.md).
+
 ## Documentation
 
+- [API contract](docs/api-contract.md) — the TokenOps ⇄ control-plane wire spec
 - [Design](docs/DESIGN.md) — storage, callers, scopes, keys
 - [Releasing](RELEASING.md) — Trusted Publishing to PyPI
 - [Changelog](CHANGELOG.md)

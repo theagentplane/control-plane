@@ -20,6 +20,7 @@ def registration_to_dict(reg: RunRegistration) -> dict[str, Any]:
         "intent": reg.intent,
         "user_dims": dict(reg.user_dims),
         "mode": reg.mode.value,
+        "registered_at": reg.registered_at,
         "status": "registered",
     }
 
@@ -30,6 +31,7 @@ def registration_from_dict(data: dict[str, Any]) -> RunRegistration:
         intent=str(data.get("intent", "")),
         user_dims={str(k): str(v) for k, v in (data.get("user_dims") or {}).items()},
         mode=parse_governance_mode(data.get("mode")),
+        registered_at=float(data.get("registered_at") or 0.0),
     )
 
 
@@ -82,6 +84,7 @@ def policy_to_dict(pi: PolicyInstance) -> dict[str, Any]:
         "budget_id": pi.budget_id,
         "segment_id": pi.segment_id,
         "enabled": pi.enabled,
+        "data_scope": pi.data_scope,
     }
 
 
@@ -94,6 +97,7 @@ def policy_from_dict(data: dict[str, Any]) -> PolicyInstance:
         budget_id=data.get("budget_id"),
         segment_id=data.get("segment_id"),
         enabled=bool(data.get("enabled", True)),
+        data_scope=str(data.get("data_scope") or "local"),
     )
 
 

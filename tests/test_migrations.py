@@ -46,9 +46,14 @@ def test_legacy_0_1_db_upgrades_additively():
               run_id TEXT PRIMARY KEY, intent TEXT, user_dims TEXT, registered_at REAL
             );
             CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent TEXT, status TEXT);
+            CREATE TABLE policy_instances (
+              id TEXT PRIMARY KEY, template TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
+              agent TEXT, budget_id TEXT, segment_id TEXT, enabled INTEGER NOT NULL DEFAULT 1
+            );
             INSERT INTO run_registrations(run_id, intent, user_dims, registered_at)
               VALUES ('r1', 'demo', '{}', 1.0);
             INSERT INTO runs(run_id, agent, status) VALUES ('r1', 'demo', 'running');
+            INSERT INTO policy_instances(id, template) VALUES ('pi1', 'step_cap');
             """
         )
         raw.commit()
@@ -62,8 +67,12 @@ def test_legacy_0_1_db_upgrades_additively():
             assert "run_registrations" in _tables(s._db)  # NOT dropped in v2
             assert s._db.execute("SELECT COUNT(*) FROM run_registrations").fetchone()[0] == 1
             assert s._db.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
-            # legacy column adds applied
+            # legacy + v2 column adds applied
             reg_cols = {r[1] for r in s._db.execute("PRAGMA table_info(run_registrations)")}
             assert "mode" in reg_cols
+            pol_cols = {r[1] for r in s._db.execute("PRAGMA table_info(policy_instances)")}
+            assert "data_scope" in pol_cols
+            # pre-existing rows get the default via the ALTER
+            assert s.get_policy_instance("pi1").data_scope == "local"
         finally:
             s.close()

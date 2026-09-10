@@ -58,8 +58,14 @@ def create_app(
     mount_web(app)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "control-plane", "version": cfg.version}
+    async def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "service": "control-plane",
+            "version": cfg.version,
+            "max_batch": cfg.max_batch,
+            "max_body_bytes": cfg.max_body_bytes,
+        }
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
@@ -186,6 +192,7 @@ def create_app(
                 "mode": saved.mode.value,
                 "intent": saved.intent,
                 "user_dims": dict(saved.user_dims),
+                "registered_at": saved.registered_at,
             },
             status_code=201,
         )
@@ -463,6 +470,33 @@ def create_app(
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
+
+    # ---- ledger halt (run-scoped — contract §7; /v1/ledger/halt/* stay as aliases) ---- #
+
+    @app.get("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_get(
+        run_id: str,
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> dict[str, Any]:
+        return {"halted": gov.ledger_is_halted(run_id), "halt_reason": gov.ledger_halt_reason(run_id)}
+
+    @app.post("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_set(
+        run_id: str,
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> dict[str, bool]:
+        body = await request.json()
+        gov.ledger_mark_halted(run_id, str(body.get("reason") or ""))
+        return {"halted": True}
+
+    @app.delete("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_clear(
+        run_id: str,
+        principal: Principal = Depends(require_scopes("admin")),
+    ) -> dict[str, bool]:
+        gov.ledger_clear_halt(run_id)
+        return {"halted": False}
 
     # ---- admin ------------------------------------------------------------ #
 

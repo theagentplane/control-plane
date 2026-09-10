@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS budgets (
 );
 CREATE TABLE IF NOT EXISTS policy_instances (
   id TEXT PRIMARY KEY, template TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
-  agent TEXT, budget_id TEXT, segment_id TEXT, enabled INTEGER NOT NULL DEFAULT 1
+  agent TEXT, budget_id TEXT, segment_id TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+  data_scope TEXT NOT NULL DEFAULT 'local'
 );
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, agent TEXT NOT NULL, status TEXT NOT NULL,
@@ -118,6 +120,9 @@ RUN_STATE_WINDOW = 64
 SCHEMA_VERSION = 2
 
 
+_log = logging.getLogger("control_plane.store")
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
@@ -154,12 +159,12 @@ class SqliteStore:
         """
         version = self._db.execute("PRAGMA user_version").fetchone()[0]
 
-        if version < 1:
-            # 0.1.x had no version pragma. These ALTERs are idempotent (guarded).
-            self._legacy_column_adds()
+        # Always run (all guarded / idempotent): covers a fresh DB (no-op — _SCHEMA
+        # already made the columns), a pre-versioning 0.1 DB, and any intermediate.
+        self._ensure_columns()
 
-        # v2 (0.2.0) is purely additive — ledger_events / run_state come from _SCHEMA,
-        # nothing to do here.
+        # v2 (0.2.0) is otherwise purely additive — ledger_events / run_state come
+        # from _SCHEMA.
 
         # if version < 3:  # 0.3.0 — fold run_registrations into runs, drop it, etc.
         #     self._migrate_v3_fold_registrations()
@@ -167,20 +172,27 @@ class SqliteStore:
         if version != SCHEMA_VERSION:
             self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
-    def _legacy_column_adds(self) -> None:
-        cols = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
-        if "dims" not in cols:
+    def _ensure_columns(self) -> None:
+        def _cols(table: str) -> set[str]:
+            return {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+
+        runs = _cols("runs")
+        if "dims" not in runs:
             self._db.execute("ALTER TABLE runs ADD COLUMN dims TEXT NOT NULL DEFAULT '{}'")
-        if "parent_span" not in cols:
+        if "parent_span" not in runs:
             self._db.execute("ALTER TABLE runs ADD COLUMN parent_span TEXT")
-        if "governance_events" not in cols:
+        if "governance_events" not in runs:
             self._db.execute(
                 "ALTER TABLE runs ADD COLUMN governance_events TEXT NOT NULL DEFAULT '[]'"
             )
-        reg_cols = {row[1] for row in self._db.execute("PRAGMA table_info(run_registrations)")}
-        if reg_cols and "mode" not in reg_cols:
+        reg = _cols("run_registrations")
+        if reg and "mode" not in reg:
             self._db.execute(
                 "ALTER TABLE run_registrations ADD COLUMN mode TEXT NOT NULL DEFAULT 'enforce'"
+            )
+        if "data_scope" not in _cols("policy_instances"):
+            self._db.execute(
+                "ALTER TABLE policy_instances ADD COLUMN data_scope TEXT NOT NULL DEFAULT 'local'"
             )
 
     def close(self) -> None:
@@ -234,10 +246,11 @@ class SqliteStore:
         if pi.template not in _TEMPLATES:  # fail closed — same rule as build_governor
             raise ValueError(f"unknown policy template {pi.template!r}; known: {sorted(_TEMPLATES)}")
         self._db.execute(
-            "REPLACE INTO policy_instances(id, template, params, agent, budget_id, segment_id, enabled) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "REPLACE INTO policy_instances"
+            "(id, template, params, agent, budget_id, segment_id, enabled, data_scope) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             (pi.id, pi.template, json.dumps(pi.params), pi.agent, pi.budget_id, pi.segment_id,
-             1 if pi.enabled else 0),
+             1 if pi.enabled else 0, pi.data_scope or "local"),
         )
         self._db.commit()
         return pi
@@ -307,12 +320,14 @@ class SqliteStore:
         for template, raw_params in (governance.get("policies") or {}).items():
             params = dict(raw_params or {})
             budget_id = params.pop("budget", None)
+            data_scope = str(params.pop("data_scope", "local") or "local")
             self.upsert_policy_instance(
                 PolicyInstance(
                     id=f"seed_{template}",
                     template=template,
                     params=params,
                     budget_id=budget_id,
+                    data_scope=data_scope,
                 )
             )
         return True
@@ -337,7 +352,10 @@ class SqliteStore:
                 task=reg.intent or None,
             )
         )
-        return reg
+        self._db.commit()
+        # Return the persisted row so callers get registered_at (contract §8 —
+        # the SDK binds this directly, no follow-up GET .../registration).
+        return self.get_run_registration(reg.run_id) or reg
 
     def resolve_run(self, run_id: str) -> RunRegistration:
         reg = self.get_run_registration(run_id)
@@ -375,6 +393,7 @@ class SqliteStore:
                     params.setdefault("dimension", seg.dimension)
                     if seg.tag_key:
                         params.setdefault("tag_key", seg.tag_key)
+            params.setdefault("data_scope", pi.data_scope or "local")
             policies[pi.template] = params
         return {"governance": {"budgets": budgets, "policies": policies}}
 
@@ -395,6 +414,14 @@ class SqliteStore:
         return rec
 
     def update_run(self, run_id: str, **fields) -> None:
+        # steps / cost_micros are derived (run_state / ledger_spent). A client-sent
+        # value is dropped in 0.2.x (logged) and rejected in 0.3.0. Contract §8.
+        for derived in ("steps", "cost_micros"):
+            if fields.pop(derived, None) is not None:
+                _log.warning(
+                    "update_run(%s): ignoring client-sent %r — derived server-side "
+                    "(deprecated in 0.2.x)", run_id, derived,
+                )
         if not fields:
             return
         if "governance_events" in fields and not isinstance(fields["governance_events"], str):
@@ -808,11 +835,13 @@ class SqliteStore:
 # ---- row -> model ---------------------------------------------------------- #
 
 def _registration(r: sqlite3.Row) -> RunRegistration:
+    keys = r.keys()
     return RunRegistration(
         run_id=r["run_id"],
         intent=r["intent"] or "",
         user_dims=json.loads(r["user_dims"] or "{}"),
-        mode=parse_governance_mode(r["mode"] if "mode" in r.keys() else None),
+        mode=parse_governance_mode(r["mode"] if "mode" in keys else None),
+        registered_at=float(r["registered_at"] or 0.0) if "registered_at" in keys else 0.0,
     )
 
 
@@ -834,9 +863,11 @@ def _budget_dict(b: BudgetSpec) -> dict:
 
 
 def _policy(r: sqlite3.Row) -> PolicyInstance:
+    keys = r.keys()
     return PolicyInstance(id=r["id"], template=r["template"], params=json.loads(r["params"]),
                           agent=r["agent"], budget_id=r["budget_id"], segment_id=r["segment_id"],
-                          enabled=bool(r["enabled"]))
+                          enabled=bool(r["enabled"]),
+                          data_scope=(r["data_scope"] if "data_scope" in keys else "local") or "local")
 
 
 def _run(r: sqlite3.Row) -> RunRecord:

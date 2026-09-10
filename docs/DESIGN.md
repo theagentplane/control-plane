@@ -40,13 +40,23 @@ No unbounded `GET /envelopes`. No single-envelope `POST`.
 
 ## TokenOps
 
-Agent:
+Full spec: [`api-contract.md`](api-contract.md).
 
-- `POST /v1/runs` register (`intent`, `user_dims`, `mode`)
+Agent (0.2.x):
+
+- `POST /v1/runs` register (`intent`, `user_dims`, `mode`) → returns the full record
+  incl. `registered_at`
 - `GET /v1/runs/{id}/registration`
-- `GET /v1/governance/{agent}`
-- `/v1/ledger/*` spend, inflight, halt
-- `PUT/PATCH /v1/run-records` dashboard row + governance events
+- `GET /v1/governance/{agent}` — policy params now carry `data_scope` (`local`|`global`)
+- `POST /v1/ledger/precheck` — one read per pre_call pass (halt + spent + inflight
+  + optional window)
+- `POST /v1/ledger/events:batch` — one write per crossing (`spent_add` / `admit` /
+  `complete` / `step` / `halt_mark` / `halt_clear`), idempotent
+- `GET|POST|DELETE /v1/ledger/runs/{id}/halt`
+- `PATCH /v1/run-records/{id}` — status / ended_at / halt_reason / detector /
+  governance_events (`steps` / `cost_micros` are derived, ignored)
+- Legacy, deprecated → removed in 0.3.0: single-op `/v1/ledger/{spent,inflight,halt}/*`,
+  `PUT /v1/run-records`
 
 UI:
 
