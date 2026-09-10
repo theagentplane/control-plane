@@ -10,6 +10,8 @@
   in one transaction, idempotent per `idempotency_key` (`ledger_events` table).
 - `run_state` table — per-run `step_count` / bounded window / velocity, fed by `step`
   events; `SqliteStore.get_run_state`.
+- `POST /v1/ledger/precheck` — one read for a pre_call pass: halt + requested
+  spent / inflight / window slices (`SqliteStore.precheck`).
 
 ## [0.1.0] — 2026-08-14
 

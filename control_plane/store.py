@@ -649,6 +649,52 @@ class SqliteStore:
             (tenant_id, run_id, step_count, json.dumps(window), velocity, ev.get("ts")),
         )
 
+    def precheck(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        segment_keys: list[str] | None = None,
+        budgets: list[dict] | None = None,
+        want: list[str] | None = None,
+    ) -> dict:
+        """Consolidated pre_call read — contract §4. Returns halt + the requested
+        spend / inflight / window slices in one shot."""
+        want = want or ["spent", "inflight", "halt"]
+        out: dict = {"server_ts": time.time()}
+
+        if "halt" in want:
+            out["halted"] = self.ledger_is_halted(run_id)
+            out["halt_reason"] = self.ledger_halt_reason(run_id)
+
+        if "spent" in want:
+            spent: dict[str, int] = {}
+            for b in budgets or []:
+                bid = str(b["budget_id"])
+                seg = str(b["segment_key"])
+                per = str(b.get("period", "lifetime"))
+                spent[f"{bid}|{seg}|{per}"] = self.ledger_get_spent(bid, seg, per)
+            out["spent"] = spent
+
+        if "inflight" in want:
+            out["inflight"] = {
+                seg: self.ledger_inflight(seg) for seg in (segment_keys or [])
+            }
+
+        if "window" in want:
+            st = self.get_run_state(tenant_id, run_id)
+            out["window"] = (
+                {
+                    "step_count": st["step_count"],
+                    "recent": st["recent"],
+                    "velocity_micros_per_step": st["velocity_micros_per_step"],
+                }
+                if st
+                else {"step_count": 0, "recent": [], "velocity_micros_per_step": 0.0}
+            )
+
+        return out
+
     def get_run_state(self, tenant_id: str, run_id: str) -> dict | None:
         row = self._db.execute(
             "SELECT step_count, window_json, velocity_micros_per_step, last_ts "

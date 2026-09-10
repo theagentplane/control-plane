@@ -421,6 +421,24 @@ def create_app(
         gov.ledger_clear_halt(body["run_id"])
         return {"status": "cleared"}
 
+    @app.post("/v1/ledger/precheck", tags=["agent-tokenops"])
+    async def ledger_precheck(
+        request: Request,
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> dict[str, Any]:
+        """Caller: TokenOps sidecar. One read for a pre_call pass — contract §4."""
+        body = await request.json()
+        run_id = str(body.get("run_id") or "").strip()
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        return gov.precheck(
+            principal.tenant_id,
+            run_id,
+            segment_keys=body.get("segment_keys") or [],
+            budgets=body.get("budgets") or [],
+            want=body.get("want") or ["spent", "inflight", "halt"],
+        )
+
     @app.post("/v1/ledger/events:batch", tags=["agent-tokenops"])
     async def ledger_events_batch(
         request: Request,
