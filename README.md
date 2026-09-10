@@ -203,7 +203,7 @@ Ideas welcome via GitHub issues.
 |---|---|---|---|
 | 0.1.x | ≤ 0.2.1 | ≥ 0.3.0 | single-op `/v1/ledger/*`, `PUT /v1/run-records` |
 | **0.2.x** | ≤ 0.2.1 **and** `<next>` | ≥ 0.3.0 | **additive** — old clients keep working; adds `precheck` / `events:batch`, `run_state`, `data_scope` |
-| 0.3.x | `<next>`+ only | ≥ 0.3.0 | breaking — drops `run_registrations`, `PUT /v1/run-records`, legacy ledger wrappers |
+| [0.3.x](https://github.com/theagentplane/control-plane/issues/11) | `<next>`+ only | ≥ 0.3.0 | breaking — drops `run_registrations`, `PUT /v1/run-records`, legacy ledger wrappers |
 
 ### Breaking changes
 

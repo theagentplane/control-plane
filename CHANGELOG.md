@@ -6,7 +6,7 @@
 
 **Additive on the wire and schema.** 0.1-era clients keep working against 0.2.x; the
 breaking fold (drop `run_registrations`, remove `create_run`, narrow `PATCH`) is
-deferred to 0.3.0, released after `tokenops <next>`.
+deferred to 0.3.0 (#11), released after `tokenops <next>`.
 
 Added
 - Wire contract: `docs/api-contract.md`.
@@ -23,7 +23,7 @@ Added
   `/v1/ledger/halt/*` kept as aliases.
 - `PRAGMA user_version` schema versioning (`SqliteStore.SCHEMA_VERSION = 2`) +
   forward-only `_apply_migrations()`. Opening a 0.1 DB adds the new tables/columns and
-  bumps the version — no data loss. The 0.3.0 destructive fold slots in as v3.
+  bumps the version — no data loss. The 0.3.0 destructive fold (#11) slots in as v3.
 
 Changed
 - `POST /v1/runs` response includes `registered_at`; `register_run` returns the

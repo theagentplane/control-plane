@@ -285,7 +285,7 @@ forward-only.
   **unchanged**. Opening a 0.1 DB just adds the new tables/column and bumps
   `user_version` to 2 — **no data loss, no break.**
 
-### v3 — 0.3.0 (destructive, ships after `tokenops <next>`)
+### v3 — 0.3.0 (destructive, ships after `tokenops <next>` — issue #11)
 - Fold `run_registrations` identity columns into `runs`; `DROP TABLE run_registrations`.
 - Make `runs` identity columns write-once; `steps` / `cost_micros` derived only.
 - Remove `PUT /v1/run-records` (`create_run`) and the legacy ledger wrappers.
