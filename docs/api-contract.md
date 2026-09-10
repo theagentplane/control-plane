@@ -2,8 +2,10 @@
 
 **Status:** authoritative for the 0.2.0 build.
 **Applies to:** `agentplane-control-plane` **0.2.0** ⇄ `tokenops` **`<next>`** (remote-only).
-**Breaking vs 0.1.x:** fresh `runs` schema (no `run_registrations`), `create_run`
-removed from the agent path, new `precheck` / `events:batch` routes. See §13, §15.
+**0.2.0 is additive** — new `precheck` / `events:batch` routes, new `ledger_events` /
+`run_state` tables, `data_scope` column. 0.1-era clients keep working. The breaking
+fold (drop `run_registrations`, remove `create_run`, narrow `PATCH`) is **0.3.0**,
+shipped after `tokenops <next>`. See §13, §15.
 
 Epic: theagentplane/control-plane#10 · TokenOps epic: theagentplane/tokenops#118.
 
@@ -23,7 +25,7 @@ Epic: theagentplane/control-plane#10 · TokenOps epic: theagentplane/tokenops#11
 | D8 | `trajectory_hint` disabled → **no `trajectory/*` routes**. |
 | D10 | Budget fan-out = **one** `spent_add` event carrying all `targets`; plane applies them in one transaction. |
 | D11 | Inflight counter safety (call-id set) is out of scope → tokenops#116. This contract assumes synchronous `admit`/`complete`. |
-| D12 | No `run_registrations` table; identity columns live on `runs`, write-once; `create_run` removed from the agent path (tokenops#117). |
+| D12 | Identity columns move to `runs`, write-once; `create_run` removed — **staged**: deprecated shims in 0.2.x, `run_registrations` dropped and `create_run` removed in 0.3.0, after `tokenops <next>` (tokenops#117). |
 | D13 | One `runs` row per `run_id` — no per-agent participation rows. Per-agent spend = an `agent`-dimension accumulator in `ledger_spent`. |
 | D14 | `span_id` removed from TokenOps. Cross-hop link = `X-TokenOps-Run-Id` only. No `X-TokenOps-Parent-Span-Id`. |
 
@@ -195,14 +197,21 @@ Request unchanged: `{ run_id?, intent, user_dims, mode }`.
 ### `GET /v1/runs/{run_id}/registration`  *(unchanged surface — scope: read)*
 Serves identity columns from `runs`. `404` `{ "error": "run '<id>' is not registered" }`.
 
-### `PATCH /v1/run-records/{run_id}`  *(narrowed — scope: ingest)*
-Only agent→plane run-row write after registration. Allow-list: `status`, `ended_at`,
-`halt_reason`, `detector`, `governance_events`. `steps` / `cost_micros` are **rejected**
-(derived from `run_state` / `ledger_spent`).
+### `PATCH /v1/run-records/{run_id}`  *(scope: ingest)*
+Preferred allow-list: `status`, `ended_at`, `halt_reason`, `detector`,
+`governance_events`. In **0.2.x** `steps` / `cost_micros` are still accepted but
+**ignored** (logged as deprecated) — they are derived from `run_state` / `ledger_spent`.
+**0.3.0** narrows to the allow-list and rejects the rest.
 
-### Removed
-- `create_run` / `PUT /v1/run-records` from the agent path.
-- `run_registrations` table.
+### Deprecated in 0.2.x, removed in 0.3.0
+- `PUT /v1/run-records` (`create_run`) — still works (writes `runs`) but the SDK must
+  stop calling it; registration is the run-row creator.
+- `run_registrations` table — still present. The 0.3.0 fold drops it.
+- Legacy `/v1/ledger/halt/*` and single-op `/v1/ledger/{spent,inflight}/*` writes —
+  wrappers over the new paths / `apply_events`.
+
+**0.2.0 is additive on the wire and in the schema.** A 0.1-era client keeps working;
+the break is deferred to 0.3.0, which ships after `tokenops <next>`.
 
 ---
 
@@ -260,28 +269,29 @@ closes it. Plane side: keep `GET /ready` cheap.
 
 ---
 
-## 13. Schema — 0.2.0 (clean start, no in-place migration)
+## 13. Schema & migrations
 
-Pre-1.0. 0.2.0 ships a **fresh schema**:
+Tracked in `PRAGMA user_version` (`SqliteStore.SCHEMA_VERSION`). `_SCHEMA`
+(`CREATE TABLE IF NOT EXISTS`) runs on every open; `_apply_migrations()` does the rest
+forward-only.
 
-- `runs` — identity columns (`intent`/`task`, `user_dims`, `mode`, `parent_run`,
-  `registered_at`, `started_at`) written once by `register_run`; mutable columns
-  (`status`, `ended_at`, `halt_reason`, `detector`, `governance_events`) via `PATCH`
-  with an explicit allow-list; `steps` / `cost_micros` **derived**, never client-stored.
-- **No `run_registrations` table.**
-- `run_state (tenant_id, run_id PK, step_count, window_json, velocity_inputs, last_ts)`.
-- `ledger_events (tenant_id, idempotency_key PRIMARY KEY, applied_at)`.
-- `policy_instances.data_scope TEXT NOT NULL DEFAULT 'local'`.
-- `ledger_spent` / `ledger_inflight` / `ledger_halt` unchanged in shape.
+### v2 — 0.2.0 (additive, auto-applied)
+- `ledger_events (tenant_id, idempotency_key PRIMARY KEY, applied_at)` — new table.
+- `run_state (tenant_id, run_id PK, step_count, window_json,
+  velocity_micros_per_step, last_ts)` — new table.
+- `policy_instances.data_scope TEXT NOT NULL DEFAULT 'local'` — new column (`_migrate`
+  `ALTER` for existing DBs).
+- `runs`, `run_registrations`, `ledger_spent` / `ledger_inflight` / `ledger_halt`
+  **unchanged**. Opening a 0.1 DB just adds the new tables/column and bumps
+  `user_version` to 2 — **no data loss, no break.**
 
-Startup: if the DB has a `run_registrations` table (0.1 schema) the plane **refuses to
-start** — `"0.1 schema detected; point CONTROL_PLANE_DB at a fresh file or run
-control-plane migrate --from 0.1"`.
-
-`control-plane migrate --from 0.1` is an optional one-off script (not auto-run): fold
-`run_registrations` into `runs`, drop it, add the new tables/columns. Historical
-`runs.cost_micros` / `steps` are recomputed from `ledger_spent` where possible, else
-nulled.
+### v3 — 0.3.0 (destructive, ships after `tokenops <next>`)
+- Fold `run_registrations` identity columns into `runs`; `DROP TABLE run_registrations`.
+- Make `runs` identity columns write-once; `steps` / `cost_micros` derived only.
+- Remove `PUT /v1/run-records` (`create_run`) and the legacy ledger wrappers.
+- Historical `runs.cost_micros` / `steps` recomputed from `ledger_spent` where possible,
+  else nulled (pre-0.2 values are known-incoherent for multi-agent runs).
+- Runs automatically as a `_apply_migrations()` step on first open of a v2 DB.
 
 ---
 
@@ -299,10 +309,12 @@ nulled.
 
 ## 15. Compatibility
 
-| tokenops | agentplane-control-plane | agent-chronicle |
-|---|---|---|
-| ≤ 0.2.1 | 0.1.x | ≥ 0.3.0 |
-| `<next>` (remote-only) | ≥ 0.2.0 | ≥ 0.3.0 |
+| tokenops | agentplane-control-plane | agent-chronicle | notes |
+|---|---|---|---|
+| ≤ 0.2.1 | 0.1.x **or 0.2.x** | ≥ 0.3.0 | 0.2.0 is additive — old clients keep working against it |
+| `<next>` (remote-only) | ≥ 0.2.0 | ≥ 0.3.0 | uses `precheck` / `events:batch` |
+| `<next>` | **not** 0.3.0+ until it drops `create_run` | ≥ 0.3.0 | 0.3.0 removes the deprecated shims |
 
-Mixing across the boundary is unsupported. Publish this table in both repo READMEs with
-a **Breaking changes** subsection.
+The hard break is **control-plane 0.3.0**, released only after `tokenops <next>` stops
+calling `PUT /v1/run-records`. Publish this table in both repo READMEs with a
+**Breaking changes** subsection.

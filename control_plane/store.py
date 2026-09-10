@@ -109,6 +109,14 @@ CREATE TABLE IF NOT EXISTS run_state (
 #: Bound on the per-run BoundaryStep ring kept in ``run_state.window_json``.
 RUN_STATE_WINDOW = 64
 
+#: Current schema version, tracked in ``PRAGMA user_version``.
+#:   0 → pre-versioning (0.1.x). Legacy ad-hoc ALTERs run, then bumped to current.
+#:   2 → 0.2.0: additive only. ``_SCHEMA`` (CREATE IF NOT EXISTS) covers the new
+#:       ``ledger_events`` / ``run_state`` tables on any existing DB. No destructive
+#:       change — ``run_registrations`` and the ``run-records`` write path stay
+#:       (deprecated). The 0.3.0 fold (drop ``run_registrations``, etc.) will be v3.
+SCHEMA_VERSION = 2
+
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -132,13 +140,34 @@ class SqliteStore:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=5000")
-        self._db.executescript(_SCHEMA)
-        self._migrate()
+        self._db.executescript(_SCHEMA)  # CREATE IF NOT EXISTS — fresh DB + new tables
+        self._apply_migrations()
         self._db.commit()
         if auto_seed:
             self.seed_default_governance_if_empty()
 
-    def _migrate(self) -> None:
+    def _apply_migrations(self) -> None:
+        """Forward-only schema migrations, tracked in ``PRAGMA user_version``.
+
+        ``_SCHEMA`` already ran, so every table exists. This only adds columns / does
+        destructive folds that ``CREATE IF NOT EXISTS`` cannot express.
+        """
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+
+        if version < 1:
+            # 0.1.x had no version pragma. These ALTERs are idempotent (guarded).
+            self._legacy_column_adds()
+
+        # v2 (0.2.0) is purely additive — ledger_events / run_state come from _SCHEMA,
+        # nothing to do here.
+
+        # if version < 3:  # 0.3.0 — fold run_registrations into runs, drop it, etc.
+        #     self._migrate_v3_fold_registrations()
+
+        if version != SCHEMA_VERSION:
+            self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _legacy_column_adds(self) -> None:
         cols = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "dims" not in cols:
             self._db.execute("ALTER TABLE runs ADD COLUMN dims TEXT NOT NULL DEFAULT '{}'")
@@ -149,7 +178,7 @@ class SqliteStore:
                 "ALTER TABLE runs ADD COLUMN governance_events TEXT NOT NULL DEFAULT '[]'"
             )
         reg_cols = {row[1] for row in self._db.execute("PRAGMA table_info(run_registrations)")}
-        if "mode" not in reg_cols:
+        if reg_cols and "mode" not in reg_cols:
             self._db.execute(
                 "ALTER TABLE run_registrations ADD COLUMN mode TEXT NOT NULL DEFAULT 'enforce'"
             )
