@@ -14,6 +14,11 @@
   `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` — Windows has no SIGTERM, so `stop`
   there is a hard stop, not a graceful drain.
   New deps: `psutil`, `platformdirs`.
+- `Dockerfile` + `docker-compose.yml` — the repo's first container image. Builds from
+  source (`pip install .`), runs as a non-root user, SQLite on a `/data` volume,
+  built-in `HEALTHCHECK` against `/health`. Entrypoint is `control-plane serve`
+  (foreground) — the container is its own process supervisor, so the new
+  `start`/`stop`/`status` background mode is for local dev only, not for images.
 
 ## [0.2.0] — TokenOps remote-only (#10)
 

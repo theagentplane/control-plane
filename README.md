@@ -112,6 +112,34 @@ control-plane serve --port 8800 --db control_plane.db
 
 `control-plane ui` is a pointer, not a second server: the HTML UI is served with the API.
 
+## Docker
+
+For hosting (a shared team plane, a demo environment) rather than a local dev loop:
+
+```bash
+docker compose up -d      # builds the image, starts on :8800, persists SQLite in a volume
+docker compose logs -f
+docker compose down       # add -v to also drop the data volume
+```
+
+Or without Compose:
+
+```bash
+docker build -t agentplane-control-plane .
+docker run -d --name control-plane -p 8800:8800 -v control-plane-data:/data agentplane-control-plane
+```
+
+The image's entrypoint is `control-plane serve` (foreground, PID 1) — **not** `start`.
+Docker/Kubernetes is already the process supervisor here (restart policy, health
+checks via the built-in `HEALTHCHECK` hitting `/health`, log collection from
+stdout/stderr); `start`/`stop`/`status` are for running the plane directly on a
+developer's machine, where nothing else is supervising the process. Don't run them
+inside the container — a background/detached mode would exit PID 1 as soon as it
+spawned its child, and the container would exit with it.
+
+Set `CONTROL_PLANE_API_KEYS` before exposing the container beyond localhost — the
+default (empty) is anonymous, all-scopes access.
+
 ## Sidecars
 
 Point both libraries at the same origin. Do **not** set a SQLite path on the agents.
