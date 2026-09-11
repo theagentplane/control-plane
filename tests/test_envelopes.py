@@ -29,7 +29,9 @@ def test_batch_ingest_and_query_by_trace(make_client):
     envs = client.get("/v1/traces/tr1/envelopes")
     assert len(envs.json()["envelopes"]) == 1
 
-    assert client.post("/v1/envelopes", json={"envelope_id": "x", "trace_id": "y"}).status_code == 404
+    assert (
+        client.post("/v1/envelopes", json={"envelope_id": "x", "trace_id": "y"}).status_code == 404
+    )
 
 
 def test_traces_listed_recent_first(make_client):
@@ -62,9 +64,12 @@ def test_traces_listed_recent_first(make_client):
 
 def test_batch_and_auth(make_client):
     client = make_client(api_keys="agent:t1:ingest,reader:t1:read")
-    assert client.post(
-        "/v1/envelopes:batch", json={"envelopes": [{"envelope_id": "e", "trace_id": "t"}]}
-    ).status_code == 401
+    assert (
+        client.post(
+            "/v1/envelopes:batch", json={"envelopes": [{"envelope_id": "e", "trace_id": "t"}]}
+        ).status_code
+        == 401
+    )
 
     r = client.post(
         "/v1/envelopes:batch",

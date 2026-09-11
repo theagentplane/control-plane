@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- `control-plane start` / `stop` / `status` — run the plane detached from the
+  terminal as one managed background instance (PID + state file under a
+  `platformdirs` user-state dir; logs redirected to a file since the process is no
+  longer attached to a console). `start` waits for `/health` before returning and
+  reaps the process if it never comes up; `stop` escalates `terminate()` → `kill()`
+  on a timeout; both are idempotent (safe to call when already in the target state).
+  Cross-platform: POSIX detaches via `start_new_session`, Windows via
+  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` — Windows has no SIGTERM, so `stop`
+  there is a hard stop, not a graceful drain.
+  New deps: `psutil`, `platformdirs`.
+
 ## [0.2.0] — TokenOps remote-only (#10)
 
 **Additive on the wire and schema.** 0.1-era clients keep working against 0.2.x; the

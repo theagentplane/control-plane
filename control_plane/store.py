@@ -244,13 +244,23 @@ class SqliteStore:
 
     def upsert_policy_instance(self, pi: PolicyInstance) -> PolicyInstance:
         if pi.template not in _TEMPLATES:  # fail closed — same rule as build_governor
-            raise ValueError(f"unknown policy template {pi.template!r}; known: {sorted(_TEMPLATES)}")
+            raise ValueError(
+                f"unknown policy template {pi.template!r}; known: {sorted(_TEMPLATES)}"
+            )
         self._db.execute(
             "REPLACE INTO policy_instances"
             "(id, template, params, agent, budget_id, segment_id, enabled, data_scope) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            (pi.id, pi.template, json.dumps(pi.params), pi.agent, pi.budget_id, pi.segment_id,
-             1 if pi.enabled else 0, pi.data_scope or "local"),
+            (
+                pi.id,
+                pi.template,
+                json.dumps(pi.params),
+                pi.agent,
+                pi.budget_id,
+                pi.segment_id,
+                1 if pi.enabled else 0,
+                pi.data_scope or "local",
+            ),
         )
         self._db.commit()
         return pi
@@ -260,7 +270,9 @@ class SqliteStore:
         return _policy(row) if row else None
 
     def list_policy_instances(self) -> list[PolicyInstance]:
-        return [_policy(r) for r in self._db.execute("SELECT * FROM policy_instances ORDER BY template")]
+        return [
+            _policy(r) for r in self._db.execute("SELECT * FROM policy_instances ORDER BY template")
+        ]
 
     def delete_policy_instance(self, pid: str) -> None:
         self._db.execute("DELETE FROM policy_instances WHERE id=?", (pid,))
@@ -281,8 +293,14 @@ class SqliteStore:
     def clear_all(self) -> None:
         """Delete every row (runs, registrations, governance, ledger). Schema is preserved."""
         for table in (
-            "runs", "run_registrations", "policy_instances", "budgets", "segments",
-            "ledger_spent", "ledger_inflight", "ledger_halt",
+            "runs",
+            "run_registrations",
+            "policy_instances",
+            "budgets",
+            "segments",
+            "ledger_spent",
+            "ledger_inflight",
+            "ledger_halt",
         ):
             self._db.execute(f"DELETE FROM {table}")
         self._db.commit()
@@ -364,7 +382,9 @@ class SqliteStore:
         return reg
 
     def get_run_registration(self, run_id: str) -> RunRegistration | None:
-        row = self._db.execute("SELECT * FROM run_registrations WHERE run_id=?", (run_id,)).fetchone()
+        row = self._db.execute(
+            "SELECT * FROM run_registrations WHERE run_id=?", (run_id,)
+        ).fetchone()
         return _registration(row) if row else None
 
     # ---- the bridge to build_governor ------------------------------------- #
@@ -377,8 +397,11 @@ class SqliteStore:
         for segment-scoped templates. One instance per template (last wins) — matches the
         Governor's name-routed registration.
         """
-        instances = [pi for pi in self.list_policy_instances()
-                     if pi.enabled and (pi.agent is None or pi.agent == agent)]
+        instances = [
+            pi
+            for pi in self.list_policy_instances()
+            if pi.enabled and (pi.agent is None or pi.agent == agent)
+        ]
         budget_ids = {pi.budget_id for pi in instances if pi.budget_id}
         budgets = [_budget_dict(self.get_budget(bid)) for bid in budget_ids if self.get_budget(bid)]
 
@@ -406,9 +429,22 @@ class SqliteStore:
             "REPLACE INTO runs(run_id, agent, status, parent_run, parent_span, halt_reason, detector, "
             "cost_micros, steps, started_at, ended_at, task, dims, governance_events) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (rec.run_id, rec.agent, rec.status, rec.parent_run, rec.parent_span, rec.halt_reason,
-             rec.detector, rec.cost_micros, rec.steps, rec.started_at, rec.ended_at, rec.task,
-             json.dumps(rec.dims), json.dumps(rec.governance_events)),
+            (
+                rec.run_id,
+                rec.agent,
+                rec.status,
+                rec.parent_run,
+                rec.parent_span,
+                rec.halt_reason,
+                rec.detector,
+                rec.cost_micros,
+                rec.steps,
+                rec.started_at,
+                rec.ended_at,
+                rec.task,
+                json.dumps(rec.dims),
+                json.dumps(rec.governance_events),
+            ),
         )
         self._db.commit()
         return rec
@@ -420,7 +456,9 @@ class SqliteStore:
             if fields.pop(derived, None) is not None:
                 _log.warning(
                     "update_run(%s): ignoring client-sent %r — derived server-side "
-                    "(deprecated in 0.2.x)", run_id, derived,
+                    "(deprecated in 0.2.x)",
+                    run_id,
+                    derived,
                 )
         if not fields:
             return
@@ -454,7 +492,11 @@ class SqliteStore:
     # ---- shared ledger (cross-process spend / inflight / halt) ------------ #
 
     def ledger_add_spent(
-        self, budget_id: str, segment_key: str, period: str, delta: int,
+        self,
+        budget_id: str,
+        segment_key: str,
+        period: str,
+        delta: int,
     ) -> int:
         """Atomically increment a budget accumulator; return the new total."""
         self._db.execute(
@@ -487,7 +529,8 @@ class SqliteStore:
             (segment_key,),
         )
         row = self._db.execute(
-            "SELECT count FROM ledger_inflight WHERE segment_key=?", (segment_key,),
+            "SELECT count FROM ledger_inflight WHERE segment_key=?",
+            (segment_key,),
         ).fetchone()
         self._db.commit()
         return int(row[0]) if row else 0
@@ -498,14 +541,16 @@ class SqliteStore:
             (segment_key,),
         )
         row = self._db.execute(
-            "SELECT count FROM ledger_inflight WHERE segment_key=?", (segment_key,),
+            "SELECT count FROM ledger_inflight WHERE segment_key=?",
+            (segment_key,),
         ).fetchone()
         self._db.commit()
         return int(row[0]) if row else 0
 
     def ledger_inflight(self, segment_key: str) -> int:
         row = self._db.execute(
-            "SELECT count FROM ledger_inflight WHERE segment_key=?", (segment_key,),
+            "SELECT count FROM ledger_inflight WHERE segment_key=?",
+            (segment_key,),
         ).fetchone()
         return int(row[0]) if row else 0
 
@@ -524,13 +569,15 @@ class SqliteStore:
 
     def ledger_is_halted(self, run_id: str) -> bool:
         row = self._db.execute(
-            "SELECT halted FROM ledger_halt WHERE run_id=?", (run_id,),
+            "SELECT halted FROM ledger_halt WHERE run_id=?",
+            (run_id,),
         ).fetchone()
         return bool(row and row[0])
 
     def ledger_halt_reason(self, run_id: str) -> str | None:
         row = self._db.execute(
-            "SELECT halt_reason FROM ledger_halt WHERE run_id=?", (run_id,),
+            "SELECT halt_reason FROM ledger_halt WHERE run_id=?",
+            (run_id,),
         ).fetchone()
         return row[0] if row else None
 
@@ -572,8 +619,11 @@ class SqliteStore:
                     if kind == "spent_add":
                         for t in ev.get("targets") or []:
                             touched.add(
-                                (str(t["budget_id"]), str(t["segment_key"]),
-                                 str(t.get("period", "lifetime")))
+                                (
+                                    str(t["budget_id"]),
+                                    str(t["segment_key"]),
+                                    str(t.get("period", "lifetime")),
+                                )
                             )
                     if ev.get("run_id"):
                         run_ids.add(str(ev["run_id"]))
@@ -594,8 +644,7 @@ class SqliteStore:
                 self._db.commit()
 
                 totals = {
-                    f"{b}|{s}|{p}": self.ledger_get_spent(b, s, p)
-                    for (b, s, p) in sorted(touched)
+                    f"{b}|{s}|{p}": self.ledger_get_spent(b, s, p) for (b, s, p) in sorted(touched)
                 }
                 halted = any(self.ledger_is_halted(r) for r in run_ids)
             except Exception:
@@ -686,9 +735,17 @@ class SqliteStore:
         step_entry = {
             k: ev.get(k)
             for k in (
-                "agent", "seq", "node_type", "boundary_id",
-                "cost_micros", "cum_spent_micros", "usage", "tags",
-                "tool_signature", "result_hash", "ts",
+                "agent",
+                "seq",
+                "node_type",
+                "boundary_id",
+                "cost_micros",
+                "cum_spent_micros",
+                "usage",
+                "tags",
+                "tool_signature",
+                "result_hash",
+                "ts",
             )
             if ev.get(k) is not None
         }
@@ -733,9 +790,7 @@ class SqliteStore:
             out["spent"] = spent
 
         if "inflight" in want:
-            out["inflight"] = {
-                seg: self.ledger_inflight(seg) for seg in (segment_keys or [])
-            }
+            out["inflight"] = {seg: self.ledger_inflight(seg) for seg in (segment_keys or [])}
 
         if "window" in want:
             st = self.get_run_state(tenant_id, run_id)
@@ -834,6 +889,7 @@ class SqliteStore:
 
 # ---- row -> model ---------------------------------------------------------- #
 
+
 def _registration(r: sqlite3.Row) -> RunRegistration:
     keys = r.keys()
     return RunRegistration(
@@ -846,13 +902,23 @@ def _registration(r: sqlite3.Row) -> RunRegistration:
 
 
 def _segment(r: sqlite3.Row) -> Segment:
-    return Segment(id=r["id"], name=r["name"], dimension=r["dimension"],
-                   tag_key=r["tag_key"], match_value=r["match_value"])
+    return Segment(
+        id=r["id"],
+        name=r["name"],
+        dimension=r["dimension"],
+        tag_key=r["tag_key"],
+        match_value=r["match_value"],
+    )
 
 
 def _budget(r: sqlite3.Row) -> BudgetSpec:
-    return BudgetSpec(id=r["id"], limit_micros=r["limit_micros"], dimension=r["dimension"],
-                      tag_key=r["tag_key"], period=r["period"])
+    return BudgetSpec(
+        id=r["id"],
+        limit_micros=r["limit_micros"],
+        dimension=r["dimension"],
+        tag_key=r["tag_key"],
+        period=r["period"],
+    )
 
 
 def _budget_dict(b: BudgetSpec) -> dict:
@@ -864,10 +930,16 @@ def _budget_dict(b: BudgetSpec) -> dict:
 
 def _policy(r: sqlite3.Row) -> PolicyInstance:
     keys = r.keys()
-    return PolicyInstance(id=r["id"], template=r["template"], params=json.loads(r["params"]),
-                          agent=r["agent"], budget_id=r["budget_id"], segment_id=r["segment_id"],
-                          enabled=bool(r["enabled"]),
-                          data_scope=(r["data_scope"] if "data_scope" in keys else "local") or "local")
+    return PolicyInstance(
+        id=r["id"],
+        template=r["template"],
+        params=json.loads(r["params"]),
+        agent=r["agent"],
+        budget_id=r["budget_id"],
+        segment_id=r["segment_id"],
+        enabled=bool(r["enabled"]),
+        data_scope=(r["data_scope"] if "data_scope" in keys else "local") or "local",
+    )
 
 
 def _run(r: sqlite3.Row) -> RunRecord:
@@ -879,13 +951,19 @@ def _run(r: sqlite3.Row) -> RunRecord:
     except json.JSONDecodeError:
         governance_events = []
     return RunRecord(
-        run_id=r["run_id"], agent=r["agent"], status=r["status"],
+        run_id=r["run_id"],
+        agent=r["agent"],
+        status=r["status"],
         parent_run=r["parent_run"],
         parent_span=r["parent_span"] if "parent_span" in keys else None,
-        halt_reason=r["halt_reason"], detector=r["detector"],
-        cost_micros=r["cost_micros"], steps=r["steps"],
+        halt_reason=r["halt_reason"],
+        detector=r["detector"],
+        cost_micros=r["cost_micros"],
+        steps=r["steps"],
         started_at=r["started_at"],
-        ended_at=r["ended_at"], task=r["task"], dims=dims,
+        ended_at=r["ended_at"],
+        task=r["task"],
+        dims=dims,
         governance_events=governance_events,
     )
 

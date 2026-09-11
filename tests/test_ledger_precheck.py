@@ -6,13 +6,23 @@ from __future__ import annotations
 def _seed_spend(c, run_id="run_1", delta=10_500):
     c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{
-            "kind": "spent_add", "idempotency_key": f"{run_id}:seed", "run_id": run_id,
-            "delta_micros": delta,
-            "targets": [
-                {"budget_id": "run_llm_cap", "segment_key": f"run:{run_id}", "period": "lifetime"},
-            ],
-        }]},
+        json={
+            "events": [
+                {
+                    "kind": "spent_add",
+                    "idempotency_key": f"{run_id}:seed",
+                    "run_id": run_id,
+                    "delta_micros": delta,
+                    "targets": [
+                        {
+                            "budget_id": "run_llm_cap",
+                            "segment_key": f"run:{run_id}",
+                            "period": "lifetime",
+                        },
+                    ],
+                }
+            ]
+        },
     )
 
 
@@ -21,9 +31,16 @@ def test_precheck_returns_halt_spent_inflight(make_client):
     _seed_spend(c)
     c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{
-            "kind": "admit", "idempotency_key": "a1", "run_id": "run_1", "segment_key": "run:run_1",
-        }]},
+        json={
+            "events": [
+                {
+                    "kind": "admit",
+                    "idempotency_key": "a1",
+                    "run_id": "run_1",
+                    "segment_key": "run:run_1",
+                }
+            ]
+        },
     )
     r = c.post(
         "/v1/ledger/precheck",
@@ -49,11 +66,22 @@ def test_precheck_window_slice(make_client):
     c = make_client()
     c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{
-            "kind": "step", "idempotency_key": "run_1:a:1:step", "run_id": "run_1",
-            "agent": "a", "seq": 1, "node_type": "llm", "boundary_id": "a.chat",
-            "cost_micros": 10_500, "cum_spent_micros": 10_500, "ts": 1.0,
-        }]},
+        json={
+            "events": [
+                {
+                    "kind": "step",
+                    "idempotency_key": "run_1:a:1:step",
+                    "run_id": "run_1",
+                    "agent": "a",
+                    "seq": 1,
+                    "node_type": "llm",
+                    "boundary_id": "a.chat",
+                    "cost_micros": 10_500,
+                    "cum_spent_micros": 10_500,
+                    "ts": 1.0,
+                }
+            ]
+        },
     )
     r = c.post(
         "/v1/ledger/precheck",
@@ -69,10 +97,17 @@ def test_precheck_reflects_halt(make_client):
     c = make_client()
     c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{
-            "kind": "halt_mark", "idempotency_key": "h", "run_id": "run_1",
-            "reason": "step_cap", "detector": "step_cap",
-        }]},
+        json={
+            "events": [
+                {
+                    "kind": "halt_mark",
+                    "idempotency_key": "h",
+                    "run_id": "run_1",
+                    "reason": "step_cap",
+                    "detector": "step_cap",
+                }
+            ]
+        },
     )
     body = c.post("/v1/ledger/precheck", json={"run_id": "run_1", "want": ["halt"]}).json()
     assert body["halted"] is True

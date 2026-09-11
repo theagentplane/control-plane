@@ -30,9 +30,7 @@ def make_client():
         db = str(Path(td) / "t.db")
         store = SqliteStore(db, auto_seed=auto_seed)
         env = EnvelopeStore(db)
-        app = create_app(
-            store=store, envelopes=env, settings=Settings(db_path=db, **settings_kw)
-        )
+        app = create_app(store=store, envelopes=env, settings=Settings(db_path=db, **settings_kw))
         client = TestClient(app)
         created.append((client, store, env, td))
         return client

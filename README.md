@@ -91,10 +91,24 @@ pip install -e ".[dev]"
 ## Quick start
 
 ```bash
-control-plane serve --port 8800 --db control_plane.db
+control-plane start          # runs in the background; safe to re-run (no-op if already up)
+control-plane status         # pid, port, version, /health
+control-plane stop
 ```
 
 Open [http://127.0.0.1:8800/](http://127.0.0.1:8800/) — Admin, Chronicle, TokenOps. No login.
+
+One managed instance per machine user; `start`/`stop`/`status` track it via a small
+state file (`platformdirs` user-state dir) and a PID — `stop` never touches a process
+it didn't start. Logs go to a file next to the state (path printed by `start`), since
+the process is detached from your terminal.
+
+Prefer the foreground, un-managed form for scripting, containers, or when you want
+Ctrl-C to stop it:
+
+```bash
+control-plane serve --port 8800 --db control_plane.db
+```
 
 `control-plane ui` is a pointer, not a second server: the HTML UI is served with the API.
 

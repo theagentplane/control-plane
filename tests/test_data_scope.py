@@ -17,7 +17,9 @@ def test_default_is_local():
     with tempfile.TemporaryDirectory() as td:
         s = _store(td)
         try:
-            s.upsert_policy_instance(PolicyInstance(id="p1", template="step_cap", params={"max_steps": 5}))
+            s.upsert_policy_instance(
+                PolicyInstance(id="p1", template="step_cap", params={"max_steps": 5})
+            )
             assert s.get_policy_instance("p1").data_scope == "local"
         finally:
             s.close()

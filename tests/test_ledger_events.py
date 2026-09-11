@@ -90,10 +90,17 @@ def test_halt_mark_shows_in_halt_and_batch_ack(make_client):
     c = make_client()
     r = c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{
-            "kind": "halt_mark", "idempotency_key": "h1", "run_id": "run_1",
-            "reason": "step_cap: 20", "detector": "step_cap",
-        }]},
+        json={
+            "events": [
+                {
+                    "kind": "halt_mark",
+                    "idempotency_key": "h1",
+                    "run_id": "run_1",
+                    "reason": "step_cap: 20",
+                    "detector": "step_cap",
+                }
+            ]
+        },
     )
     assert r.json()["halted"] is True
     assert c.get("/v1/ledger/halt/run_1").json()["halted"] is True
@@ -103,23 +110,30 @@ def test_unknown_kind_is_400_and_batch_rolls_back(make_client):
     c = make_client()
     r = c.post(
         "/v1/ledger/events:batch",
-        json={"events": [
-            _spent_add("ok", 10_500),
-            {"kind": "bogus", "idempotency_key": "x", "run_id": "run_1"},
-        ]},
+        json={
+            "events": [
+                _spent_add("ok", 10_500),
+                {"kind": "bogus", "idempotency_key": "x", "run_id": "run_1"},
+            ]
+        },
     )
     assert r.status_code == 400
-    assert c.get(
-        "/v1/ledger/spent",
-        params={"budget_id": "run_llm_cap", "segment_key": "run:run_1", "period": "lifetime"},
-    ).json()["spent_micros"] == 0
+    assert (
+        c.get(
+            "/v1/ledger/spent",
+            params={"budget_id": "run_llm_cap", "segment_key": "run:run_1", "period": "lifetime"},
+        ).json()["spent_micros"]
+        == 0
+    )
 
 
 def test_missing_idempotency_key_is_400(make_client):
     c = make_client()
     r = c.post(
         "/v1/ledger/events:batch",
-        json={"events": [{"kind": "spent_add", "run_id": "run_1", "delta_micros": 1, "targets": []}]},
+        json={
+            "events": [{"kind": "spent_add", "run_id": "run_1", "delta_micros": 1, "targets": []}]
+        },
     )
     assert r.status_code == 400
 

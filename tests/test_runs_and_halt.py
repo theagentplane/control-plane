@@ -6,7 +6,9 @@ from __future__ import annotations
 
 def test_register_returns_registered_at(make_client):
     c = make_client()
-    r = c.post("/v1/runs", json={"run_id": "run_1", "intent": "demo", "user_dims": {"user_id": "u"}})
+    r = c.post(
+        "/v1/runs", json={"run_id": "run_1", "intent": "demo", "user_dims": {"user_id": "u"}}
+    )
     assert r.status_code == 201
     body = r.json()
     assert body["run_id"] == "run_1"
@@ -27,8 +29,8 @@ def test_patch_run_record_ignores_derived_fields(make_client):
     assert r.status_code == 200
     rec = c.get("/v1/run-records/run_1").json()
     assert rec["status"] == "completed"
-    assert rec["steps"] == 0          # client value dropped
-    assert rec["cost_micros"] == 0    # client value dropped
+    assert rec["steps"] == 0  # client value dropped
+    assert rec["cost_micros"] == 0  # client value dropped
 
 
 def test_run_scoped_halt_get_post_delete(make_client):
@@ -37,7 +39,9 @@ def test_run_scoped_halt_get_post_delete(make_client):
 
     assert c.get("/v1/ledger/runs/run_1/halt").json() == {"halted": False, "halt_reason": None}
 
-    assert c.post("/v1/ledger/runs/run_1/halt", json={"reason": "step_cap: 20"}).json() == {"halted": True}
+    assert c.post("/v1/ledger/runs/run_1/halt", json={"reason": "step_cap: 20"}).json() == {
+        "halted": True
+    }
     got = c.get("/v1/ledger/runs/run_1/halt").json()
     assert got["halted"] is True and got["halt_reason"] == "step_cap: 20"
     # run row status flipped too
