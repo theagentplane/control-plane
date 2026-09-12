@@ -15,7 +15,7 @@ class Settings:
     default_durability: str = "sync"  # sync | queued
     max_batch: int = 100
     max_body_bytes: int = 4 * 1024 * 1024
-    version: str = "0.1.0"
+    version: str = "0.2.0"
 
 
 def load_settings() -> Settings:
@@ -27,5 +27,5 @@ def load_settings() -> Settings:
         default_durability=os.environ.get("CONTROL_PLANE_DURABILITY", "sync"),
         max_batch=int(os.environ.get("CONTROL_PLANE_MAX_BATCH", "100")),
         max_body_bytes=int(os.environ.get("CONTROL_PLANE_MAX_BODY", str(4 * 1024 * 1024))),
-        version=os.environ.get("CONTROL_PLANE_VERSION", "0.1.0"),
+        version=os.environ.get("CONTROL_PLANE_VERSION", "0.2.0"),
     )

@@ -1,0 +1,26 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+.venv
+venv
+*.egg-info
+build
+dist
+
+# Not needed to build/run the image
+tests
+docs
+ui
+CHANGELOG.md
+RELEASING.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Local dev artifacts — never bake a DB into the image
+*.db
+*.db-*
+control_plane.db

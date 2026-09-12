@@ -1,0 +1,23 @@
+services:
+  control-plane:
+    build: .
+    image: agentplane-control-plane:local
+    ports:
+      - "8800:8800"
+    volumes:
+      - control-plane-data:/data
+    environment:
+      # Comma-separated key:tenant:scope+scope,... — empty = local anonymous, all
+      # scopes (fine for a single trusted host; set real keys before exposing this
+      # beyond localhost).
+      CONTROL_PLANE_API_KEYS: ""
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8800/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  control-plane-data:

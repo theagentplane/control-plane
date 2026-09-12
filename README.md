@@ -91,12 +91,54 @@ pip install -e ".[dev]"
 ## Quick start
 
 ```bash
-control-plane serve --port 8800 --db control_plane.db
+control-plane start          # runs in the background; safe to re-run (no-op if already up)
+control-plane status         # pid, port, version, /health
+control-plane stop
 ```
 
 Open [http://127.0.0.1:8800/](http://127.0.0.1:8800/) — Admin, Chronicle, TokenOps. No login.
 
+One managed instance per machine user; `start`/`stop`/`status` track it via a small
+state file (`platformdirs` user-state dir) and a PID — `stop` never touches a process
+it didn't start. Logs go to a file next to the state (path printed by `start`), since
+the process is detached from your terminal.
+
+Prefer the foreground, un-managed form for scripting, containers, or when you want
+Ctrl-C to stop it:
+
+```bash
+control-plane serve --port 8800 --db control_plane.db
+```
+
 `control-plane ui` is a pointer, not a second server: the HTML UI is served with the API.
+
+## Docker
+
+For hosting (a shared team plane, a demo environment) rather than a local dev loop:
+
+```bash
+docker compose up -d      # builds the image, starts on :8800, persists SQLite in a volume
+docker compose logs -f
+docker compose down       # add -v to also drop the data volume
+```
+
+Or without Compose:
+
+```bash
+docker build -t agentplane-control-plane .
+docker run -d --name control-plane -p 8800:8800 -v control-plane-data:/data agentplane-control-plane
+```
+
+The image's entrypoint is `control-plane serve` (foreground, PID 1) — **not** `start`.
+Docker/Kubernetes is already the process supervisor here (restart policy, health
+checks via the built-in `HEALTHCHECK` hitting `/health`, log collection from
+stdout/stderr); `start`/`stop`/`status` are for running the plane directly on a
+developer's machine, where nothing else is supervising the process. Don't run them
+inside the container — a background/detached mode would exit PID 1 as soon as it
+spawned its child, and the container would exit with it.
+
+Set `CONTROL_PLANE_API_KEYS` before exposing the container beyond localhost — the
+default (empty) is anonymous, all-scopes access.
 
 ## Sidecars
 
@@ -197,8 +239,28 @@ The plane is early (0.x). Near-term:
 
 Ideas welcome via GitHub issues.
 
+## Compatibility
+
+| agentplane-control-plane | tokenops | agent-chronicle | notes |
+|---|---|---|---|
+| 0.1.x | ≤ 0.2.1 | ≥ 0.3.0 | single-op `/v1/ledger/*`, `PUT /v1/run-records` |
+| **0.2.x** | ≤ 0.2.1 **and** `<next>` | ≥ 0.3.0 | **additive** — old clients keep working; adds `precheck` / `events:batch`, `run_state`, `data_scope` |
+| [0.3.x](https://github.com/theagentplane/control-plane/issues/11) | `<next>`+ only | ≥ 0.3.0 | breaking — drops `run_registrations`, `PUT /v1/run-records`, legacy ledger wrappers |
+
+### Breaking changes
+
+- **0.2.0 → 0.3.0:** `run_registrations` folded into `runs` and dropped;
+  `PUT /v1/run-records` (`create_run`) removed; `PATCH /v1/run-records` rejects
+  `steps` / `cost_micros` (0.2.x only ignores them); legacy `/v1/ledger/halt/*` and
+  single-op `/v1/ledger/{spent,inflight}/*` writes removed. Runs as an automatic
+  `PRAGMA user_version` v3 migration. Released only after `tokenops <next>` stops
+  calling `create_run`.
+
+Full contract: [`docs/api-contract.md`](docs/api-contract.md).
+
 ## Documentation
 
+- [API contract](docs/api-contract.md) — the TokenOps ⇄ control-plane wire spec
 - [Design](docs/DESIGN.md) — storage, callers, scopes, keys
 - [Releasing](RELEASING.md) — Trusted Publishing to PyPI
 - [Changelog](CHANGELOG.md)

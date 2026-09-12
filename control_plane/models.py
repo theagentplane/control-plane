@@ -33,6 +33,7 @@ class RunRegistration:
     intent: str = ""
     user_dims: dict[str, str] = field(default_factory=dict)
     mode: GovernanceMode = GovernanceMode.ENFORCE
+    registered_at: float = 0.0
 
 
 class RunNotRegisteredError(LookupError):
@@ -70,6 +71,9 @@ class PolicyInstance:
     budget_id: str | None = None
     segment_id: str | None = None
     enabled: bool = True
+    #: Where the SDK runs this policy's detector — "local" (per-process LocalRunState)
+    #: or "global" (plane aggregate via /v1/ledger/precheck). Contract §10.
+    data_scope: str = "local"
 
 
 @dataclass

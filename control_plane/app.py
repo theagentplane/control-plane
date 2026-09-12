@@ -58,8 +58,14 @@ def create_app(
     mount_web(app)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "control-plane", "version": cfg.version}
+    async def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "service": "control-plane",
+            "version": cfg.version,
+            "max_batch": cfg.max_batch,
+            "max_body_bytes": cfg.max_body_bytes,
+        }
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
@@ -186,6 +192,7 @@ def create_app(
                 "mode": saved.mode.value,
                 "intent": saved.intent,
                 "user_dims": dict(saved.user_dims),
+                "registered_at": saved.registered_at,
             },
             status_code=201,
         )
@@ -210,7 +217,9 @@ def create_app(
         return gov.governance_config_for(agent)
 
     @app.get("/v1/segments")
-    async def list_segments(principal: Principal = Depends(require_scopes("read"))) -> list[dict[str, Any]]:
+    async def list_segments(
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> list[dict[str, Any]]:
         return [segment_to_dict(s) for s in gov.list_segments()]
 
     @app.put("/v1/segments")
@@ -240,7 +249,9 @@ def create_app(
         return {"status": "deleted"}
 
     @app.get("/v1/budgets")
-    async def list_budgets(principal: Principal = Depends(require_scopes("read"))) -> list[dict[str, Any]]:
+    async def list_budgets(
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> list[dict[str, Any]]:
         return [budget_to_dict(b) for b in gov.list_budgets()]
 
     @app.put("/v1/budgets")
@@ -270,7 +281,9 @@ def create_app(
         return {"status": "deleted"}
 
     @app.get("/v1/policies")
-    async def list_policies(principal: Principal = Depends(require_scopes("read"))) -> list[dict[str, Any]]:
+    async def list_policies(
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> list[dict[str, Any]]:
         return [policy_to_dict(p) for p in gov.list_policy_instances()]
 
     @app.put("/v1/policies")
@@ -339,7 +352,9 @@ def create_app(
         limit: int = 200,
         principal: Principal = Depends(require_scopes("read")),
     ) -> list[dict[str, Any]]:
-        return [run_to_dict(r) for r in gov.list_runs(problematic_only=problematic_only, limit=limit)]
+        return [
+            run_to_dict(r) for r in gov.list_runs(problematic_only=problematic_only, limit=limit)
+        ]
 
     @app.get("/v1/run-records/tag-keys")
     async def run_tag_keys(
@@ -357,7 +372,10 @@ def create_app(
     ) -> dict[str, int]:
         body = await request.json()
         spent = gov.ledger_add_spent(
-            body["budget_id"], body["segment_key"], body.get("period", "lifetime"), int(body["delta"]),
+            body["budget_id"],
+            body["segment_key"],
+            body.get("period", "lifetime"),
+            int(body["delta"]),
         )
         return {"spent_micros": spent}
 
@@ -421,6 +439,79 @@ def create_app(
         gov.ledger_clear_halt(body["run_id"])
         return {"status": "cleared"}
 
+    @app.post("/v1/ledger/precheck", tags=["agent-tokenops"])
+    async def ledger_precheck(
+        request: Request,
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> dict[str, Any]:
+        """Caller: TokenOps sidecar. One read for a pre_call pass — contract §4."""
+        body = await request.json()
+        run_id = str(body.get("run_id") or "").strip()
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        return gov.precheck(
+            principal.tenant_id,
+            run_id,
+            segment_keys=body.get("segment_keys") or [],
+            budgets=body.get("budgets") or [],
+            want=body.get("want") or ["spent", "inflight", "halt"],
+        )
+
+    @app.post("/v1/ledger/events:batch", tags=["agent-tokenops"])
+    async def ledger_events_batch(
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> JSONResponse:
+        """Caller: TokenOps sidecar. Batched ledger writes — contract §5.
+
+        ``Durability: sync|queued`` header (queued == sync in 0.2.0). Applied in array
+        order, one transaction. Idempotent per ``idempotency_key`` (per tenant).
+        """
+        if int(request.headers.get("content-length") or 0) > cfg.max_body_bytes:
+            raise HTTPException(status_code=413, detail="payload too large")
+        _durability(request)  # validates the header (sync|queued)
+        payload = await request.json()
+        events = payload.get("events") if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            raise HTTPException(status_code=400, detail="expected {events: [...]}")
+        if len(events) > cfg.max_batch:
+            raise HTTPException(status_code=400, detail=f"batch max {cfg.max_batch}")
+        try:
+            result = gov.apply_events(principal.tenant_id, events)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    # ---- ledger halt (run-scoped — contract §7; /v1/ledger/halt/* stay as aliases) ---- #
+
+    @app.get("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_get(
+        run_id: str,
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> dict[str, Any]:
+        return {
+            "halted": gov.ledger_is_halted(run_id),
+            "halt_reason": gov.ledger_halt_reason(run_id),
+        }
+
+    @app.post("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_set(
+        run_id: str,
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> dict[str, bool]:
+        body = await request.json()
+        gov.ledger_mark_halted(run_id, str(body.get("reason") or ""))
+        return {"halted": True}
+
+    @app.delete("/v1/ledger/runs/{run_id}/halt")
+    async def run_halt_clear(
+        run_id: str,
+        principal: Principal = Depends(require_scopes("admin")),
+    ) -> dict[str, bool]:
+        gov.ledger_clear_halt(run_id)
+        return {"halted": False}
+
     # ---- admin ------------------------------------------------------------ #
 
     @app.post("/v1/admin/seed-if-empty")
@@ -438,7 +529,9 @@ def create_app(
         return {"status": "cleared"}
 
     @app.post("/v1/admin/clear-governance")
-    async def clear_governance(principal: Principal = Depends(require_scopes("admin"))) -> dict[str, str]:
+    async def clear_governance(
+        principal: Principal = Depends(require_scopes("admin")),
+    ) -> dict[str, str]:
         gov.clear_governance()
         return {"status": "cleared"}
 
@@ -458,7 +551,10 @@ def create_app(
         """Caller: Admin UI. Env keys include the secret (already on the host). DB keys show prefix only."""
         db_keys = [k.__dict__ for k in gov.list_api_keys()]
         env_keys = [k.__dict__ for k in env_key_views(cfg.api_keys)]
-        return {"keys": env_keys + db_keys, "auth_disabled": not cfg.api_keys and not gov.list_api_keys()}
+        return {
+            "keys": env_keys + db_keys,
+            "auth_disabled": not cfg.api_keys and not gov.list_api_keys(),
+        }
 
     @app.post("/v1/admin/keys", tags=["ui"])
     async def create_key(
@@ -484,7 +580,9 @@ def create_app(
     ) -> dict[str, str]:
         """Caller: Admin UI. Env keys cannot be deleted here."""
         if kid.startswith("env:"):
-            raise HTTPException(status_code=400, detail="env keys are removed by unsetting CONTROL_PLANE_API_KEYS")
+            raise HTTPException(
+                status_code=400, detail="env keys are removed by unsetting CONTROL_PLANE_API_KEYS"
+            )
         gov.delete_api_key(kid)
         return {"status": "deleted"}
 
