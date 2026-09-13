@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-13 — reach the CLI without PATH (#14)
+
+**Docs and a second entrypoint only.** No wire, schema, or API change; `0.2.0`
+clients and the `control-plane` console script behave exactly as before.
+
+Added
+- `python -m control_plane` — the CLI as a module, for when the interpreter's
+  scripts directory is not on `PATH`. `pip` installs the console script there and
+  cannot add it to `PATH` (wheels have no install-time hooks), which is the default
+  outcome on Windows under the Python Install Manager: only the `python.exe` shim is
+  on `PATH`, so `control-plane` installs successfully and is then not found.
+- `tests/test_cli_entrypoints.py` — the module form is a supported entrypoint, not a
+  convenience, so it is covered.
+
+Changed
+- `argparse` `prog` is derived from `argv[0]`, so usage and hints name the form you
+  invoked. `control-plane ui` previously printed `Run: control-plane serve --port
+  8800` — naming the very command a PATH-less user could not run.
+- README `Install` gains *If `control-plane` isn't found* (`pipx` / `uv tool`, the
+  module form, and a `sysconfig` one-liner that prints the directory to add) and
+  *After upgrading Python* (installs belong to one interpreter, so both forms stop
+  working after an upgrade; a hand-added scripts directory is version-scoped).
+
 ## [0.2.0] — 2026-09-13 — TokenOps remote-only + background CLI (#10)
 
 **Additive on the wire and schema.** 0.1-era clients keep working against 0.2.x; the

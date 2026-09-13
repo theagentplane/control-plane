@@ -33,7 +33,10 @@ In the `theagentplane/control-plane` repo:
 1. **Settings → Environments → New environment**
 2. Name it exactly `pypi` (must match `environment: pypi` in `release.yml` and
    the PyPI publisher form).
-3. Optional: add required reviewers so a human must approve before upload.
+3. Required reviewers are configured on this environment, so the PyPI upload
+   pauses until a human approves it in **Actions → the run → Review deployments**.
+   PyPI versions are immutable, so this is the last point at which a bad build
+   can be stopped.
 
 No secrets needed — OIDC uses `permissions: id-token: write` in `release.yml`.
 
@@ -52,7 +55,7 @@ No secrets needed — OIDC uses `permissions: id-token: write` in `release.yml`.
    2. Build sdist/wheel and `twine check`
    3. Create and push the git tag
    4. Create the GitHub Release (attaches dist artifacts)
-   5. Upload to PyPI (may wait on `pypi` environment approval)
+   5. Upload to PyPI — **waits on `pypi` environment approval** (see above)
 5. Verify:
    ```bash
    pip install agentplane-control-plane==X.Y.Z
