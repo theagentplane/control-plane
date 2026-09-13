@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
 import sys
 
 
+def _prog() -> str:
+    """Name this invocation by how it was reached, so hints stay copy-pasteable."""
+    if pathlib.Path(sys.argv[0]).name == "__main__.py":
+        return "python -m control_plane"
+    return "control-plane"
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="control-plane")
+    prog = _prog()
+    parser = argparse.ArgumentParser(prog=prog)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     serve = sub.add_parser("serve", help="Run the FastAPI control plane (foreground)")
@@ -62,7 +71,7 @@ def main() -> None:
         info = servicectl.status()
         raise SystemExit(0 if info.get("running") else 1)
     elif args.cmd == "ui":
-        print("UI is served with the API. Run: control-plane serve --port 8800")
+        print(f"UI is served with the API. Run: {prog} serve --port 8800")
         print("Then open http://127.0.0.1:8800/")
         raise SystemExit(0)
 

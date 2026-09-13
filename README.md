@@ -81,6 +81,50 @@ pip install agentplane-control-plane
 PyPI name is `agentplane-control-plane`; import is `control_plane`; CLI is `control-plane`.
 See [`RELEASING.md`](RELEASING.md) for releases.
 
+Every command below has an equivalent module form that needs nothing on `PATH`:
+
+```bash
+control-plane status            # console script
+python -m control_plane status  # same thing, always available
+```
+
+### If `control-plane` isn't found
+
+`pip` drops the console script into your interpreter's scripts directory
+(`Scripts\` on Windows, `bin/` elsewhere) and **cannot** add that directory to
+`PATH` — no Python package can, so this is not something we can fix from our end.
+pip usually prints a warning when it happens; it is easy to miss.
+
+Three ways out, best first:
+
+```bash
+pipx install agentplane-control-plane   # isolated venv + a bin dir already on PATH
+uv tool install agentplane-control-plane
+python -m control_plane serve           # no install change; works immediately
+```
+
+Or put the directory on `PATH` yourself — `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"`
+prints the one to add.
+
+This bites hardest on Windows with the [Python Install Manager](https://docs.python.org/3/using/windows.html),
+which puts only its `python.exe` shim on `PATH` and leaves each interpreter's
+`Scripts\` off it.
+
+### After upgrading Python
+
+Installs belong to one interpreter. A new Python is a new, empty `site-packages`,
+so **both** forms stop working after an upgrade — `control-plane` as "command not
+found", `python -m control_plane` as the clearer `No module named control_plane`.
+Reinstall into the new interpreter:
+
+```bash
+python -m pip install --upgrade agentplane-control-plane
+```
+
+If you added a scripts directory to `PATH` by hand, note that it is usually
+version-scoped (e.g. `...\pythoncore-3.14-64\Scripts`) and will need updating too.
+`pipx` and `uv` avoid this by pinning their own interpreter.
+
 From a clone:
 
 ```bash
