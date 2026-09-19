@@ -123,7 +123,8 @@ Mirrors the `envelopes:batch` shape. All ledger writes go through here.
   "boundary_id": "researcher.chat", "cost_micros": 10500, "cum_spent_micros": 10500,
   "tool_signature": null, "result_hash": null,
   "usage": { "input": 1000, "output": 500 },
-  "tags": { "provider": "anthropic", "model": "claude-sonnet-4-6" } }
+  "tags": { "provider": "anthropic", "model": "claude-sonnet-4-6" },
+  "compaction": { "tokens_before": 12000, "tokens_after": 8000, "tokens_saved": 4000 } }  // optional (0.2.2)
 
 // halt_mark / halt_clear
 { "kind": "halt_mark",  "reason": "step_cap: 20 steps", "detector": "step_cap" }
@@ -145,6 +146,11 @@ Mirrors the `envelopes:batch` shape. All ledger writes go through here.
 - `spent_add` → upsert every `target` in `ledger_spent`.
 - `step` → upsert the `(tenant_id, run_id)` row in `run_state` (`step_count`, bounded
   `window_json` ring, velocity inputs, `last_ts`).
+  If the step carries the optional `compaction` object, also sum its numeric fields
+  (plus a `calls` count) into `run_policy_stats.stats_json` for policy `context_compaction`,
+  keyed `(tenant_id, run_id, policy)`, in the same transaction. `runs` is not touched.
+  Exposed as `policy_stats` on `GET /v1/run-records/{run_id}`. Deduped
+  replays never reach this, so they do not double count. Values are chars/4 estimates.
 - `halt_mark` / `halt_clear` → `ledger_halt` (+ flip `runs.status` when the run row
   exists).
 - Zero-cost crossings emit **only** a `step` — no `spent_add` with `delta_micros: 0`.
@@ -284,6 +290,10 @@ forward-only.
 - `runs`, `run_registrations`, `ledger_spent` / `ledger_inflight` / `ledger_halt`
   **unchanged**. Opening a 0.1 DB just adds the new tables/column and bumps
   `user_version` to 2 — **no data loss, no break.**
+
+### v2.1 — 0.2.2 (additive, auto-applied)
+- `run_policy_stats (tenant_id, run_id, policy, stats_json)` — new table, PK
+  `(tenant_id, run_id, policy)`. `user_version` stays 2.
 
 ### v3 — 0.3.0 (destructive, ships after `tokenops <next>` — issue #11)
 - Fold `run_registrations` identity columns into `runs`; `DROP TABLE run_registrations`.

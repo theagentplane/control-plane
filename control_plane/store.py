@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS ledger_events (
   applied_at REAL NOT NULL,
   PRIMARY KEY (tenant_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS run_policy_stats (
+  tenant_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  stats_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (tenant_id, run_id, policy)
+);
 CREATE TABLE IF NOT EXISTS run_state (
   tenant_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
@@ -751,6 +758,8 @@ class SqliteStore:
         }
         window.append(step_entry)
         window = window[-RUN_STATE_WINDOW:]
+        if isinstance(ev.get("compaction"), dict):
+            self._add_policy_stats(tenant_id, run_id, "context_compaction", ev["compaction"])
         step_count = (row["step_count"] if row else 0) + 1
         velocity = _velocity_from_window(window)
         self._db.execute(
@@ -761,6 +770,36 @@ class SqliteStore:
             "velocity_micros_per_step=excluded.velocity_micros_per_step, last_ts=excluded.last_ts",
             (tenant_id, run_id, step_count, json.dumps(window), velocity, ev.get("ts")),
         )
+
+    def _add_policy_stats(self, tenant_id: str, run_id: str, policy: str, delta: dict) -> None:
+        """Fold one call's numeric metrics into the run's per-policy aggregate (contract §5).
+
+        Stored as JSON so a policy can report new metrics without a schema change. Every
+        numeric key is summed and ``calls`` counts contributions. Runs inside the batch
+        transaction after the idempotency check, so a deduped replay cannot double count.
+        """
+        row = self._db.execute(
+            "SELECT stats_json FROM run_policy_stats WHERE tenant_id=? AND run_id=? AND policy=?",
+            (tenant_id, run_id, policy),
+        ).fetchone()
+        stats = json.loads(row["stats_json"]) if row else {}
+        for k, v in delta.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                stats[k] = stats.get(k, 0) + v
+        stats["calls"] = stats.get("calls", 0) + 1
+        self._db.execute(
+            "INSERT INTO run_policy_stats(tenant_id, run_id, policy, stats_json) VALUES (?,?,?,?) "
+            "ON CONFLICT(tenant_id, run_id, policy) DO UPDATE SET stats_json=excluded.stats_json",
+            (tenant_id, run_id, policy, json.dumps(stats)),
+        )
+
+    def get_policy_stats(self, tenant_id: str, run_id: str) -> dict[str, dict]:
+        """``{policy: {metric: value}}`` aggregated over the run."""
+        rows = self._db.execute(
+            "SELECT policy, stats_json FROM run_policy_stats WHERE tenant_id=? AND run_id=?",
+            (tenant_id, run_id),
+        )
+        return {r["policy"]: json.loads(r["stats_json"]) for r in rows}
 
     def precheck(
         self,

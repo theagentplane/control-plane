@@ -44,6 +44,14 @@ def render_run_detail(store: Store, run: RunRecord) -> None:
     c3.metric("Duration (s)", _duration(run))
     c4.metric("Governance", mode)
 
+    compaction = store.get_policy_stats("local", run.run_id).get("context_compaction")
+    if compaction:
+        st.metric(
+            "Tokens saved by compaction (est.)",
+            f"{int(compaction.get('tokens_saved', 0)):,}",
+            help=f"{int(compaction.get('calls', 0))} compacted call(s); chars/4 estimate.",
+        )
+
     with st.expander("Run metadata", expanded=False):
         st.json(
             {

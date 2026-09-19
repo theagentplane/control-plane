@@ -155,3 +155,64 @@ def test_bad_durability_header_is_400(make_client):
         headers={"Durability": "whenever"},
     )
     assert r.status_code == 400
+
+
+def _compacted_step(seq: int, saved: int, *, run_id: str = "run_1") -> dict:
+    ev = _step(seq, seq * 10_500, run_id=run_id)
+    ev["compaction"] = {
+        "tokens_before": saved + 8_000,
+        "tokens_after": 8_000,
+        "tokens_saved": saved,
+    }
+    return ev
+
+
+def _stats(c, run_id: str = "run_1") -> dict:
+    return c.app.state.store.get_policy_stats("local", run_id)
+
+
+def test_compaction_is_aggregated_per_run_and_policy(make_client):
+    c = make_client()
+    c.post(
+        "/v1/ledger/events:batch",
+        json={"events": [_compacted_step(1, 4_000), _step(2, 21_000), _compacted_step(3, 1_000)]},
+    )
+    assert _stats(c)["context_compaction"] == {
+        "tokens_before": 12_000 + 9_000,
+        "tokens_after": 16_000,
+        "tokens_saved": 5_000,
+        "calls": 2,
+    }
+
+
+def test_replayed_compacted_step_does_not_double_count(make_client):
+    c = make_client()
+    ev = _compacted_step(1, 4_000)
+    c.post("/v1/ledger/events:batch", json={"events": [ev]})
+    r = c.post("/v1/ledger/events:batch", json={"events": [ev]})
+    assert r.json()["deduped"] == 1
+    assert _stats(c)["context_compaction"]["tokens_saved"] == 4_000
+
+
+def test_compaction_survives_run_state_ring_eviction(make_client):
+    c = make_client()
+    n = 70  # > RUN_STATE_WINDOW
+    c.post(
+        "/v1/ledger/events:batch",
+        json={"events": [_compacted_step(i, 100) for i in range(1, n + 1)]},
+    )
+    assert _stats(c)["context_compaction"]["tokens_saved"] == 100 * n
+
+
+def test_run_record_read_exposes_policy_stats_and_needs_no_runs_row(make_client):
+    c = make_client()
+    c.put("/v1/run-records", json={"run_id": "run_1", "agent": "researcher"})
+    c.post("/v1/ledger/events:batch", json={"events": [_compacted_step(1, 4_000)]})
+    body = c.get("/v1/run-records/run_1").json()
+    assert body["policy_stats"]["context_compaction"]["tokens_saved"] == 4_000
+
+
+def test_steps_without_compaction_write_no_stats(make_client):
+    c = make_client()
+    c.post("/v1/ledger/events:batch", json={"events": [_step(1, 10_500)]})
+    assert _stats(c) == {}
