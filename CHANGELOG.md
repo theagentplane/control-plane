@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-19 — persist compaction token savings (#18)
+
+**Additive on the wire and schema.** `0.2.0`/`0.2.1` clients keep working; a client that
+does not send `compaction` sees no change. The new table is created automatically.
+
+Fixed
+- `step` events carrying `compaction` (`tokens_before` / `tokens_after` / `tokens_saved`,
+  sent by TokenOps for `context_compaction`) were accepted with `201` and silently dropped.
+  They are now persisted (#19).
+
+Added
+- `run_policy_stats (tenant_id, run_id, policy, stats_json)` — per-run, per-policy
+  aggregate. Numeric metrics are summed and `calls` counts contributions, in the same
+  transaction and behind the same idempotency check as the step, so a deduped replay
+  cannot double count. `user_version` stays 2.
+- `policy_stats` on `GET /v1/run-records/{run_id}` and in the run detail UI.
+- Wire contract (`docs/api-contract.md`) documents the optional `step.compaction` field.
+
+Changed
+- The admin `context_compaction` policy template no longer suggests the removed
+  `has_hook` flag.
+
 ## [0.2.1] — 2026-09-13 — reach the CLI without PATH (#14)
 
 **Docs and a second entrypoint only.** No wire, schema, or API change; `0.2.0`
