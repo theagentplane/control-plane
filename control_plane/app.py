@@ -344,7 +344,9 @@ def create_app(
         rec = gov.get_run(run_id)
         if rec is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        return JSONResponse(run_to_dict(rec))
+        body = run_to_dict(rec)
+        body["policy_stats"] = gov.get_policy_stats(principal.tenant_id, run_id)
+        return JSONResponse(body)
 
     @app.get("/v1/run-records")
     async def list_run_records(
