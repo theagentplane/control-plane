@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentplane_primitives.models import Envelope, Span, Trace
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from control_plane.auth import Principal, env_key_views, parse_api_keys, require_scopes
+from control_plane.chronicle_entities import is_primitives_envelope
 from control_plane.envelope_store import EnvelopeStore
 from control_plane.models import RunAlreadyRegisteredError, parse_governance_mode
 from control_plane.serde import (
@@ -88,6 +91,72 @@ def create_app(
 
     # ---- Chronicle envelopes (agent ingest = batch only) ------------------ #
 
+    def _append_any(tenant_id: str, items: list[Any]) -> dict[str, Any]:
+        """Primitives envelopes are validated with the shared models; anything else is the
+        legacy (pre-1.0 Chronicle) shape and keeps its old path. Validation is all-or-nothing."""
+        parsed: list[Envelope] = []
+        for item in items:
+            if not is_primitives_envelope(item):
+                continue
+            try:
+                parsed.append(Envelope.model_validate(item))
+            except ValidationError as exc:
+                first = exc.errors()[0]
+                raise ValueError(
+                    f"invalid envelope: {first['msg']} at {list(first['loc'])}"
+                ) from exc
+        legacy = [item for item in items if not is_primitives_envelope(item)]
+        result: dict[str, Any] = {"accepted": 0, "deduped": 0, "envelope_ids": []}
+        for part in (
+            env_store.append_primitives(tenant_id, parsed) if parsed else None,
+            env_store.append_many(tenant_id, legacy) if legacy else None,
+        ):
+            if part is None:
+                continue
+            result["accepted"] += part["accepted"]
+            result["deduped"] += part["deduped"]
+            result["envelope_ids"].extend(part["envelope_ids"])
+        return result
+
+    @app.post("/v1/traces", tags=["agent-chronicle"])
+    async def register_trace(
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> JSONResponse:
+        """Caller: Chronicle at the trace root. Idempotent; labels are written once."""
+        try:
+            trace = Trace.model_validate(await request.json())
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid trace: {exc}") from exc
+        created, stored = env_store.upsert_trace(principal.tenant_id, trace)
+        return JSONResponse(stored, status_code=201 if created else 200)
+
+    @app.put("/v1/traces/{trace_id}/spans/{span_id}", tags=["agent-chronicle"])
+    async def put_span(
+        trace_id: str,
+        span_id: str,
+        request: Request,
+        principal: Principal = Depends(require_scopes("ingest")),
+    ) -> dict[str, Any]:
+        """Caller: Chronicle. Opens a span, and closes it later. A closed span is immutable."""
+        try:
+            span = Span.model_validate(await request.json())
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid span: {exc}") from exc
+        if (span.trace_id, span.span_id) != (trace_id, span_id):
+            raise HTTPException(status_code=400, detail="path ids do not match the body")
+        stored = env_store.upsert_span(principal.tenant_id, span)
+        return {"span_id": span_id, "status": "stored" if stored else "deduped"}
+
+    @app.get("/v1/traces/{trace_id}/spans/{span_id}/envelopes", tags=["agent-chronicle"])
+    async def span_envelopes(
+        trace_id: str,
+        span_id: str,
+        principal: Principal = Depends(require_scopes("read")),
+    ) -> dict[str, Any]:
+        """Caller: Chronicle replay. The envelopes of one span of one trace."""
+        return {"envelopes": env_store.list_span_envelopes(principal.tenant_id, trace_id, span_id)}
+
     @app.post("/v1/envelopes:batch", tags=["agent-chronicle"])
     async def ingest_batch(
         request: Request,
@@ -104,7 +173,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"batch max {cfg.max_batch}")
         durability = _durability(request)
         try:
-            result = env_store.append_many(principal.tenant_id, items)
+            result = _append_any(principal.tenant_id, items)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(
