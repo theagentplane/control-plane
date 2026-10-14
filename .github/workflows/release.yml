@@ -1,129 +1,111 @@
 name: Release
 
-# One-shot release: optional tag input → verify → build → tag → GitHub Release → PyPI.
-# See RELEASING.md for Trusted Publisher setup.
+# One-shot release: optional tag input -> verify -> build -> tag -> GitHub Release -> PyPI.
+# See RELEASING.md for Trusted Publishing setup.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.0). Leave empty to use v{version} from pyproject.toml."
+        description: "Release tag (e.g. v1.0.0). Leave empty to use v{version} from _version.py."
         required: false
         type: string
 
+permissions: {}
+
+# One release at a time; never cancel a publish that is already running.
 concurrency:
   group: release
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 jobs:
   release:
+    name: Verify, build, tag and release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write
+      contents: write # create the tag and the GitHub Release
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true # needed to push the tag
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Resolve tag and verify against pyproject
+      - name: Resolve the tag and verify it against the package version
         id: meta
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          version="$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          init="$(grep -m1 '__version__' control_plane/__init__.py | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ "$init" != "$version" ]; then
-            echo "::error::__version__ ($init) does not match pyproject version ($version)."
-            exit 1
-          fi
-          if [ -n "${INPUT_TAG}" ]; then
-            tag="${INPUT_TAG}"
-          else
-            tag="v${version}"
-          fi
+          version="$(python3 -c "import runpy; print(runpy.run_path('src/control_plane/_version.py')['__version__'])")"
+          tag="${INPUT_TAG:-v${version}}"
           case "$tag" in
             v*) ;;
             *) tag="v${tag}" ;;
           esac
-          tag_version="${tag#v}"
-          echo "tag: $tag | pyproject version: $version | sha: $GITHUB_SHA"
-          if [ "$tag_version" != "$version" ]; then
-            echo "::error::Tag $tag does not match pyproject version $version. Bump version (and __version__) and merge before releasing."
+          echo "tag: $tag | package version: $version | sha: $GITHUB_SHA"
+          if [ "${tag#v}" != "$version" ]; then
+            echo "::error::Tag $tag does not match package version $version. Bump _version.py and merge it first."
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Build sdist and wheel
-        run: |
-          pip install "build>=1.2"
-          python -m build
+      - run: uv sync
+      - run: uv build
+      - run: uv run twine check dist/*
 
-      - name: Check metadata
-        run: |
-          pip install "twine>=6"
-          twine check dist/*
-
-      - name: Create tag and GitHub Release
+      - name: Create the tag and the GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
             existing="$(git rev-list -n 1 "${TAG}")"
             if [ "$existing" != "$GITHUB_SHA" ]; then
               echo "::error::Tag ${TAG} already exists on $existing, not $GITHUB_SHA."
               exit 1
             fi
-            echo "Tag ${TAG} already points at this commit; reusing."
           else
             git tag "${TAG}" "$GITHUB_SHA"
             git push origin "refs/tags/${TAG}"
           fi
-
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "::error::GitHub Release ${TAG} already exists. Delete it or bump the version."
             exit 1
           fi
-
           gh release create "${TAG}" dist/* \
             --title "agentplane-control-plane ${VERSION}" \
             --generate-notes \
             --target "$GITHUB_SHA"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
 
   publish:
+    name: Publish to PyPI
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Matches the `pypi` environment and workflow name configured on PyPI.
     environment:
       name: pypi
       url: https://pypi.org/project/agentplane-control-plane/
     permissions:
-      id-token: write
+      id-token: write # PyPI Trusted Publishing (OIDC); no stored token
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

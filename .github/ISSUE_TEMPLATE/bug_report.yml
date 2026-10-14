@@ -1,0 +1,23 @@
+name: Bug report
+description: Something stored, served or migrated incorrectly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the request (without secrets), the response, and what you expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: database
+    attributes:
+      label: Database
+      placeholder: "sqlite, or the SQLAlchemy dialect and server version"
