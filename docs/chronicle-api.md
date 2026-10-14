@@ -15,7 +15,7 @@ Everything is tenant-scoped; a tenant never sees another tenant's traces.
 | `POST /v1/envelopes:batch` | ingest | `{"envelopes": [Envelope, ...]}` | `201 {status, accepted, deduped, envelope_ids}` |
 | `GET /v1/traces/{trace_id}/spans/{span_id}/envelopes` | read | none | `{"envelopes": [Envelope, ...]}` in call order |
 | `GET /v1/traces/{trace_id}/envelopes` | read | none | every envelope of the trace in start order |
-| `GET /v1/traces/{trace_id}` | read | none | `{trace_id, name, metadata, state, started_at, ended_at, span_count, envelope_count, spans}` |
+| `GET /v1/traces/{trace_id}` | read | none | `{trace_id, name, metadata, attributes, state, started_at, ended_at, span_count, envelope_count, spans}`; `attributes` is the mutable trace-level dict (the halt flag lives there, ADR 0006) |
 | `GET /v1/traces` | read | none | `{"traces": [...]}`, recent first |
 
 `GET /v1/traces` accepts `session_id`, `message_id`, `user_id`, `label=key:value` (repeatable),

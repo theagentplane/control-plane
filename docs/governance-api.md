@@ -66,8 +66,9 @@ of the known TokenOps templates, otherwise the write is a `400`.
 ### `events:batch`
 
 `{"events": [...]}`. Applied **in array order, in one transaction**; a malformed event is a `400`
-and nothing in the batch is applied. Every event needs an `idempotency_key`; a replayed key (per
-tenant) is counted in `deduped` and not applied again. The response has `accepted`, `deduped`,
+and nothing in the batch is applied. Events are **not deduplicated** (ADR 0007): a batch the
+client retries after a lost response is applied again, so a client must not retry a batch whose
+outcome it does not know without accepting a possible double count. The response has `accepted`,
 `atomic`, `totals` (post-commit spend for every accumulator a `spent_add` names) and `halted`.
 
 | `kind` | Fields |

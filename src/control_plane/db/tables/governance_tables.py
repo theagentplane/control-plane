@@ -1,8 +1,8 @@
 """Governance tables: configuration TokenOps pulls, and the shared ledger it writes.
 
 Configuration (segments, budgets, policy instances) is what an agent running TokenOps fetches
-with ``GET /v1/governance/{agent}``. The ledger (spend, in-flight counts, halts, per-trace state
-and per-trace policy statistics) is what agents share across processes. A run is a Chronicle
+with ``GET /v1/governance/{agent}``. The ledger (spend, in-flight counts, per-trace state and
+per-trace policy statistics) is what agents share across processes. A run is a Chronicle
 trace, so everything per run is keyed by ``trace_id``; there is no separate run table.
 """
 
@@ -16,11 +16,9 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Table,
-    Text,
 )
 
 from control_plane.db.metadata_types import metadata
-from control_plane.db.utc_datetime_types import UtcDateTime
 
 segments = Table(
     "segments",
@@ -79,26 +77,6 @@ ledger_inflight = Table(
     Column("segment_key", String(255), nullable=False),
     Column("count", Integer, nullable=False, server_default="0"),
     PrimaryKeyConstraint("tenant_id", "segment_key", name="pk_ledger_inflight"),
-)
-
-ledger_halt = Table(
-    "ledger_halt",
-    metadata,
-    Column("tenant_id", String(64), nullable=False),
-    Column("trace_id", String(32), nullable=False),
-    Column("halted", Boolean, nullable=False),
-    Column("halt_reason", Text),
-    Column("updated_at", UtcDateTime, nullable=False),
-    PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_ledger_halt"),
-)
-
-ledger_events = Table(
-    "ledger_events",
-    metadata,
-    Column("tenant_id", String(64), nullable=False),
-    Column("idempotency_key", String(255), nullable=False),
-    Column("applied_at", UtcDateTime, nullable=False),
-    PrimaryKeyConstraint("tenant_id", "idempotency_key", name="pk_ledger_events"),
 )
 
 trace_state = Table(

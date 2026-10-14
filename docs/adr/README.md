@@ -45,6 +45,9 @@ Do not write one for routine changes: a bug fix, a rename, a small refactor.
 | [0003](0003-database-neutral-service.md) | The service is not bound to one database | Accepted |
 | [0004](0004-a-run-is-a-trace.md) | A run is a Chronicle trace; there is no run table | Accepted |
 | [0005](0005-governance-is-pulled-from-the-database.md) | Governance configuration is stored here and pulled by the agent | Accepted |
+| [0006](0006-a-halt-is-a-trace-attribute.md) | A halt is an attribute of the trace, not a table | Accepted |
+| [0007](0007-ledger-events-are-not-deduplicated.md) | Ledger events are not deduplicated | Accepted |
+| [0008](0008-spend-and-in-flight-stay-ledger-tables.md) | Spend and in-flight counts stay as ledger tables | Accepted |
 
 Related repositories: [chronicle](https://github.com/theagentplane/chronicle), [primitives](https://github.com/theagentplane/primitives),
 [control-plane](https://github.com/theagentplane/control-plane), [tokenops](https://github.com/theagentplane/tokenops).

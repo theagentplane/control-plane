@@ -65,8 +65,9 @@ is, TokenOps 0.4 cannot talk to this service.
 
 ### Database
 - Baseline revision `0001`: `traces`, `trace_labels`, `spans`, `envelopes`, `segments`, `budgets`,
-  `policy_instances`, `ledger_spent`, `ledger_inflight`, `ledger_halt`, `ledger_events`,
-  `trace_state`, `trace_policy_stats`, `api_keys`.
+  `policy_instances`, `ledger_spent`, `ledger_inflight`, `trace_state`, `trace_policy_stats`,
+  `api_keys`. A halt is stored in `traces.attributes` (the primitives `Trace.attributes` dict,
+  ADR 0006); there is no halt table and no event deduplication table (ADR 0007).
 
 ## [0.2.2] — 2026-09-19 — persist compaction token savings (#18)
 

@@ -37,8 +37,9 @@ Each layer imports only from the ones before it.
 - **The pull:** `GET /v1/governance/{agent}` returns the exact dict `build_governor` consumes, with
   an ETag. The configuration (segments, budgets, policy instances) is per tenant and lives in the
   database; it is seeded from YAML and edited through the API or the TokenOps tab.
-- **The ledger:** `precheck` (one read) and `events:batch` (one idempotent write per crossing)
-  hold spend, in-flight counts, halts, per-trace step windows and per-policy statistics.
+- **The ledger:** `precheck` (one read) and `events:batch` (one write per crossing, applied in one transaction)
+  hold spend, in-flight counts, per-trace step windows and per-policy statistics. A halt is stored
+  in the trace's `attributes` (ADR 0006).
 - **A run is a trace.** There is no run registration or run record; the run list is the trace
   list joined with ledger facts.
 

@@ -2,8 +2,10 @@
 
 Every table is tenant-scoped. A trace has no stored state or status of its own: its state is
 derived from its spans. Labels live in their own indexed table (a trace's labels are written
-once). Span and envelope rows keep the columns queries need and the full primitives payload in
-``body`` so what is served back is lossless.
+once). ``attributes`` is the primitives ``Trace.attributes`` dict: mutable trace-level state
+written by the control plane and consumers (the halt flag). Span and envelope rows keep the
+columns queries need and the full primitives payload in ``body`` so what is served back is
+lossless.
 """
 
 from sqlalchemy import JSON, Column, Index, Integer, PrimaryKeyConstraint, String, Table
@@ -17,6 +19,7 @@ traces = Table(
     Column("tenant_id", String(64), nullable=False),
     Column("trace_id", String(32), nullable=False),
     Column("name", String(255)),
+    Column("attributes", JSON, nullable=False, server_default="{}"),
     Column("started_at", UtcDateTime),
     Column("ended_at", UtcDateTime),
     PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_traces"),

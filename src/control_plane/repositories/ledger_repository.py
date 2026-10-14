@@ -1,10 +1,12 @@
 """The shared ledger: spend, in-flight counts, halts, per-trace state and policy statistics.
 
 Agents in different processes share this state. Everything per run is keyed by ``trace_id``;
-a run *is* a Chronicle trace, so there is no separate run table.
+a run *is* a Chronicle trace, so there is no separate run table. A halt is not ledger state: it
+is stored in the trace's ``attributes`` (primitives ``Trace.attributes``) under the
+``tokenops.halted`` and ``tokenops.halt_reason`` keys.
 
-- ``apply_events`` applies a batch **in array order, in one transaction**, idempotent per
-  ``idempotency_key`` (per tenant): a replayed key is counted in ``deduped`` and not re-applied.
+- ``apply_events`` applies a batch **in array order, in one transaction**. Events are not
+  deduplicated: a batch the client retries after a lost response is applied again.
 - Counters are single atomic ``UPDATE ... SET n = n + delta`` statements, so concurrent writers
   on any database cannot lose an increment.
 - ``precheck`` is the one consolidated read a pre-call pass needs.
@@ -15,15 +17,19 @@ from typing import Any
 from sqlalchemy import Connection, Engine, and_, case, func, select
 
 from control_plane.db.tables import (
-    ledger_events,
-    ledger_halt,
     ledger_inflight,
     ledger_spent,
     trace_policy_stats,
     trace_state,
+    traces,
 )
+from control_plane.repositories.trace_repository import merge_attributes, read_attributes
 from control_plane.repositories.upsert_utils import increment, upsert
 from control_plane.time_utils import utc_now
+
+#: Keys in ``Trace.attributes`` that carry the halt (namespaced for TokenOps).
+HALTED_KEY = "tokenops.halted"
+HALT_REASON_KEY = "tokenops.halt_reason"
 
 #: Bound on the per-trace ring of recent steps kept in ``trace_state.window``.
 STATE_WINDOW = 64
@@ -61,51 +67,34 @@ class LedgerRepository:
     # ---- batched writes ----------------------------------------------------------------
 
     def apply_events(self, tenant_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
-        """Apply ``events`` atomically. Returns ``accepted``, ``deduped``, ``totals``, ``halted``.
+        """Apply ``events`` atomically. Returns ``accepted``, ``totals`` and ``halted``.
 
         ``totals`` is the post-commit spend for every accumulator a ``spent_add`` in this batch
-        names, so a fully deduped batch still reports current totals. A malformed event raises
-        ``ValueError`` and nothing in the batch is applied.
+        names. A malformed event raises ``ValueError`` and nothing in the batch is applied.
         """
-        accepted = deduped = 0
+        accepted = 0
         touched: set[tuple[str, str, str]] = set()
         traces_seen: set[str] = set()
         with self._engine.begin() as conn:
             for index, event in enumerate(events):
                 kind = event.get("kind")
-                key = str(event.get("idempotency_key") or "").strip()
-                if not key:
-                    raise ValueError(f"event {index} missing idempotency_key")
+                if not isinstance(kind, str):
+                    raise ValueError(f"event {index} missing kind")
                 if kind == "spent_add":
                     for target in event.get("targets") or []:
                         touched.add(_target(target))
                 if event.get("trace_id"):
                     traces_seen.add(str(event["trace_id"]))
-                seen = conn.execute(
-                    select(ledger_events.c.idempotency_key).where(
-                        and_(
-                            ledger_events.c.tenant_id == tenant_id,
-                            ledger_events.c.idempotency_key == key,
-                        )
-                    )
-                ).first()
-                if seen is not None:
-                    deduped += 1
-                    continue
                 self._apply_one(conn, tenant_id, kind, event)
-                conn.execute(
-                    ledger_events.insert().values(
-                        tenant_id=tenant_id, idempotency_key=key, applied_at=utc_now()
-                    )
-                )
                 accepted += 1
             totals = {
                 f"{b}|{s}|{p}": self._spent(conn, tenant_id, b, s, p) for b, s, p in sorted(touched)
             }
-            halted = any(self._is_halted(conn, tenant_id, t) for t in traces_seen)
+            halted = any(
+                read_attributes(conn, tenant_id, t).get(HALTED_KEY) for t in sorted(traces_seen)
+            )
         return {
             "accepted": accepted,
-            "deduped": deduped,
             "atomic": True,
             "totals": totals,
             "halted": halted,
@@ -155,20 +144,9 @@ class LedgerRepository:
         elif kind == "step":
             self._apply_step(conn, tenant_id, trace_id, event)
         elif kind == "halt_mark":
-            reason = event.get("reason") or None
-            upsert(
-                conn,
-                ledger_halt,
-                {"tenant_id": tenant_id, "trace_id": trace_id},
-                {"halted": True, "halt_reason": reason, "updated_at": utc_now()},
-            )
+            _set_halt(conn, tenant_id, trace_id, str(event.get("reason") or ""))
         elif kind == "halt_clear":
-            upsert(
-                conn,
-                ledger_halt,
-                {"tenant_id": tenant_id, "trace_id": trace_id},
-                {"halted": False, "halt_reason": None, "updated_at": utc_now()},
-            )
+            _clear_halt(conn, tenant_id, trace_id)
         else:
             raise ValueError(f"unknown event kind {kind!r}")
 
@@ -207,7 +185,7 @@ class LedgerRepository:
 
         Stored as JSON so a policy can report new metrics without a schema change. Every numeric
         key is summed and ``calls`` counts contributions. It runs inside the batch transaction
-        after the idempotency check, so a deduped replay cannot double count.
+        in the same transaction as the step that carries it.
         """
         row = conn.execute(
             select(trace_policy_stats.c.stats).where(
@@ -234,30 +212,16 @@ class LedgerRepository:
 
     def mark_halted(self, tenant_id: str, trace_id: str, reason: str = "") -> None:
         with self._engine.begin() as conn:
-            upsert(
-                conn,
-                ledger_halt,
-                {"tenant_id": tenant_id, "trace_id": trace_id},
-                {"halted": True, "halt_reason": reason or None, "updated_at": utc_now()},
-            )
+            _set_halt(conn, tenant_id, trace_id, reason)
 
     def clear_halt(self, tenant_id: str, trace_id: str) -> None:
         with self._engine.begin() as conn:
-            upsert(
-                conn,
-                ledger_halt,
-                {"tenant_id": tenant_id, "trace_id": trace_id},
-                {"halted": False, "halt_reason": None, "updated_at": utc_now()},
-            )
+            _clear_halt(conn, tenant_id, trace_id)
 
     def halt_status(self, tenant_id: str, trace_id: str) -> tuple[bool, str | None]:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(ledger_halt.c.halted, ledger_halt.c.halt_reason).where(
-                    and_(ledger_halt.c.tenant_id == tenant_id, ledger_halt.c.trace_id == trace_id)
-                )
-            ).first()
-        return (bool(row.halted), row.halt_reason) if row else (False, None)
+            attributes = read_attributes(conn, tenant_id, trace_id)
+        return bool(attributes.get(HALTED_KEY)), attributes.get(HALT_REASON_KEY)
 
     # ---- reads -------------------------------------------------------------------------
 
@@ -275,16 +239,9 @@ class LedgerRepository:
         out: dict[str, Any] = {"server_ts": utc_now().timestamp()}
         with self._engine.connect() as conn:
             if "halt" in want:
-                out["halted"] = self._is_halted(conn, tenant_id, trace_id)
-                row = conn.execute(
-                    select(ledger_halt.c.halt_reason).where(
-                        and_(
-                            ledger_halt.c.tenant_id == tenant_id,
-                            ledger_halt.c.trace_id == trace_id,
-                        )
-                    )
-                ).first()
-                out["halt_reason"] = row.halt_reason if row else None
+                attributes = read_attributes(conn, tenant_id, trace_id)
+                out["halted"] = bool(attributes.get(HALTED_KEY))
+                out["halt_reason"] = attributes.get(HALT_REASON_KEY)
             if "spent" in want:
                 spent: dict[str, int] = {}
                 for b in budgets or []:
@@ -359,14 +316,15 @@ class LedgerRepository:
         }
         with self._engine.connect() as conn:
             for r in conn.execute(
-                select(ledger_halt).where(
-                    and_(
-                        ledger_halt.c.tenant_id == tenant_id,
-                        ledger_halt.c.trace_id.in_(trace_ids),
-                    )
+                select(traces.c.trace_id, traces.c.attributes).where(
+                    and_(traces.c.tenant_id == tenant_id, traces.c.trace_id.in_(trace_ids))
                 )
             ):
-                out[r.trace_id].update(halted=bool(r.halted), halt_reason=r.halt_reason)
+                attributes = r.attributes or {}
+                out[r.trace_id].update(
+                    halted=bool(attributes.get(HALTED_KEY)),
+                    halt_reason=attributes.get(HALT_REASON_KEY),
+                )
             for r in conn.execute(
                 select(ledger_spent).where(
                     and_(
@@ -390,11 +348,24 @@ class LedgerRepository:
         return out
 
     def halted_trace_ids(self, tenant_id: str, limit: int = 100) -> list[str]:
+        """Halted traces, most recently active first.
+
+        The flag is matched with SQLAlchemy's portable JSON index expression, so no dialect SQL
+        is involved; on a large table an index on the flag is a later optimisation.
+        """
         with self._engine.connect() as conn:
             rows = conn.execute(
-                select(ledger_halt.c.trace_id)
-                .where(and_(ledger_halt.c.tenant_id == tenant_id, ledger_halt.c.halted.is_(True)))
-                .order_by(ledger_halt.c.updated_at.desc())
+                select(traces.c.trace_id)
+                .where(
+                    and_(
+                        traces.c.tenant_id == tenant_id,
+                        traces.c.attributes[HALTED_KEY].as_boolean().is_(True),
+                    )
+                )
+                .order_by(
+                    func.coalesce(traces.c.ended_at, traces.c.started_at).desc(),
+                    traces.c.trace_id,
+                )
                 .limit(limit)
             ).all()
         return [r.trace_id for r in rows]
@@ -429,14 +400,13 @@ class LedgerRepository:
         ).first()
         return int(row[0]) if row else 0
 
-    @staticmethod
-    def _is_halted(conn: Connection, tenant_id: str, trace_id: str) -> bool:
-        row = conn.execute(
-            select(ledger_halt.c.halted).where(
-                and_(ledger_halt.c.tenant_id == tenant_id, ledger_halt.c.trace_id == trace_id)
-            )
-        ).first()
-        return bool(row and row.halted)
+
+def _set_halt(conn: Connection, tenant_id: str, trace_id: str, reason: str) -> None:
+    merge_attributes(conn, tenant_id, trace_id, {HALTED_KEY: True, HALT_REASON_KEY: reason or None})
+
+
+def _clear_halt(conn: Connection, tenant_id: str, trace_id: str) -> None:
+    merge_attributes(conn, tenant_id, trace_id, {}, (HALTED_KEY, HALT_REASON_KEY))
 
 
 def _target(target: dict[str, Any]) -> tuple[str, str, str]:

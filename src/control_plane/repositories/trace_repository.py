@@ -18,7 +18,6 @@ from sqlalchemy.exc import IntegrityError
 
 from control_plane.db.tables import (
     envelopes,
-    ledger_halt,
     ledger_spent,
     spans,
     trace_labels,
@@ -46,6 +45,41 @@ def ensure_trace(conn: Connection, tenant_id: str, trace_id: str, started: datet
             )
     except IntegrityError:
         pass  # a concurrent writer created it
+
+
+def read_attributes(conn: Connection, tenant_id: str, trace_id: str) -> dict[str, Any]:
+    """The trace's ``attributes`` dict (empty if the trace does not exist)."""
+    row = conn.execute(
+        select(traces.c.attributes).where(
+            and_(traces.c.tenant_id == tenant_id, traces.c.trace_id == trace_id)
+        )
+    ).first()
+    return dict(row.attributes) if row and row.attributes else {}
+
+
+def merge_attributes(
+    conn: Connection,
+    tenant_id: str,
+    trace_id: str,
+    set_keys: dict[str, Any],
+    remove_keys: tuple[str, ...] = (),
+) -> None:
+    """Set and remove keys in the trace's ``attributes``, creating the trace row if needed.
+
+    Read-modify-write inside the caller's transaction. Two concurrent writers of the *same* key
+    resolve last write wins; writers of different keys on the same trace can overwrite each
+    other's change, which is acceptable for the flags kept here.
+    """
+    ensure_trace(conn, tenant_id, trace_id, None)
+    current = read_attributes(conn, tenant_id, trace_id)
+    current.update(set_keys)
+    for key in remove_keys:
+        current.pop(key, None)
+    conn.execute(
+        traces.update()
+        .where(and_(traces.c.tenant_id == tenant_id, traces.c.trace_id == trace_id))
+        .values(attributes=current)
+    )
 
 
 def widen_trace(
@@ -194,6 +228,7 @@ class TraceRepository:
             "trace_id": trace_id,
             "name": row.name,
             "metadata": labels,
+            "attributes": dict(row.attributes or {}),
             "state": _derived_state([b.get("state") for b in bodies]),
             "started_at": iso(row.started_at),
             "ended_at": iso(row.ended_at),
@@ -260,6 +295,7 @@ class TraceRepository:
                     "trace_id": r.trace_id,
                     "name": r.name,
                     "metadata": label_map.get(r.trace_id, {}),
+                    "attributes": dict(r.attributes or {}),
                     "state": State.OPEN.value if open_spans or not total else State.CLOSED.value,
                     "started_at": iso(r.started_at),
                     "ended_at": iso(r.ended_at),
@@ -290,7 +326,6 @@ class TraceRepository:
                     trace_labels,
                     trace_state,
                     trace_policy_stats,
-                    ledger_halt,
                     traces,
                 ):
                     conn.execute(

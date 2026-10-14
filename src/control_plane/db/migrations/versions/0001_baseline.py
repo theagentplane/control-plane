@@ -65,22 +65,6 @@ def upgrade() -> None:
         )
 
     op.create_table(
-        "ledger_events",
-        sa.Column("tenant_id", sa.String(length=64), nullable=False),
-        sa.Column("idempotency_key", sa.String(length=255), nullable=False),
-        sa.Column("applied_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("tenant_id", "idempotency_key", name="pk_ledger_events"),
-    )
-    op.create_table(
-        "ledger_halt",
-        sa.Column("tenant_id", sa.String(length=64), nullable=False),
-        sa.Column("trace_id", sa.String(length=32), nullable=False),
-        sa.Column("halted", sa.Boolean(), nullable=False),
-        sa.Column("halt_reason", sa.Text(), nullable=True),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_ledger_halt"),
-    )
-    op.create_table(
         "ledger_inflight",
         sa.Column("tenant_id", sa.String(length=64), nullable=False),
         sa.Column("segment_key", sa.String(length=255), nullable=False),
@@ -175,6 +159,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.String(length=64), nullable=False),
         sa.Column("trace_id", sa.String(length=32), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=True),
+        sa.Column("attributes", sa.JSON(), server_default="{}", nullable=False),
         sa.Column("started_at", sa.DateTime(), nullable=True),
         sa.Column("ended_at", sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_traces"),
@@ -203,8 +188,6 @@ def downgrade() -> None:
     op.drop_table("policy_instances")
     op.drop_table("ledger_spent")
     op.drop_table("ledger_inflight")
-    op.drop_table("ledger_halt")
-    op.drop_table("ledger_events")
     with op.batch_alter_table("envelopes", schema=None) as batch_op:
         batch_op.drop_index("ix_envelopes_span")
 

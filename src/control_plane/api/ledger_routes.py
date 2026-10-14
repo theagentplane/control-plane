@@ -1,8 +1,8 @@
 """Ledger routes: the shared state TokenOps agents read and write.
 
 - ``POST /v1/ledger/precheck``: the one read a pre-call pass needs.
-- ``POST /v1/ledger/events:batch``: one write per crossing, applied in order in one transaction,
-  idempotent per ``idempotency_key``.
+- ``POST /v1/ledger/events:batch``: one write per crossing, applied in order in one transaction.
+  Events are not deduplicated.
 - Halts and the per-trace view are keyed by ``trace_id``: a run is a Chronicle trace.
 """
 

@@ -17,10 +17,9 @@ Make = Callable[..., TestClient]
 TRACE = "a" * 32
 
 
-def _spent_add(key: str, delta: int, *, trace: str = TRACE) -> dict[str, Any]:
+def _spent_add(delta: int, *, trace: str = TRACE) -> dict[str, Any]:
     return {
         "kind": "spent_add",
-        "idempotency_key": key,
         "trace_id": trace,
         "delta_micros": delta,
         "targets": [
@@ -30,10 +29,9 @@ def _spent_add(key: str, delta: int, *, trace: str = TRACE) -> dict[str, Any]:
     }
 
 
-def _conc(key: str, kind: str, *, trace: str = TRACE) -> dict[str, Any]:
+def _conc(kind: str, *, trace: str = TRACE) -> dict[str, Any]:
     return {
         "kind": kind,
-        "idempotency_key": key,
         "trace_id": trace,
         "segment_key": f"trace:{trace}",
     }
@@ -42,7 +40,6 @@ def _conc(key: str, kind: str, *, trace: str = TRACE) -> dict[str, Any]:
 def _step(seq: int, cum: int, *, trace: str = TRACE) -> dict[str, Any]:
     return {
         "kind": "step",
-        "idempotency_key": f"{trace}:researcher:{seq}:step",
         "trace_id": trace,
         "agent": "researcher",
         "seq": seq,
@@ -66,10 +63,10 @@ def _precheck(client: TestClient, **body: Any) -> dict[str, Any]:
 
 def test_spent_add_fans_out_and_returns_totals(make_client: Make) -> None:
     client = make_client()
-    response = _post(client, _spent_add("k1", 10_500))
+    response = _post(client, _spent_add(10_500))
     assert response.status_code == 201
     body = response.json()
-    assert (body["accepted"], body["deduped"]) == (1, 0)
+    assert body["accepted"] == 1
     assert body["totals"] == {
         f"__trace_total__|trace:{TRACE}|lifetime": 10_500,
         f"run_llm_cap|trace:{TRACE}|lifetime": 10_500,
@@ -79,37 +76,28 @@ def test_spent_add_fans_out_and_returns_totals(make_client: Make) -> None:
 
 def test_batch_applies_in_order_and_accumulates(make_client: Make) -> None:
     client = make_client()
-    body = _post(client, _spent_add("a", 10_500), _spent_add("b", 4_800)).json()
+    body = _post(client, _spent_add(10_500), _spent_add(4_800)).json()
     assert body["totals"][f"run_llm_cap|trace:{TRACE}|lifetime"] == 15_300
 
 
-def test_a_replayed_event_is_deduped_not_reapplied(make_client: Make) -> None:
+def test_a_replayed_event_is_applied_again(make_client: Make) -> None:
+    """Events are not deduplicated (ADR 0007): a retried batch counts twice."""
     client = make_client()
-    _post(client, _spent_add("dup", 10_500))
-    body = _post(client, _spent_add("dup", 10_500)).json()
-    assert (body["accepted"], body["deduped"]) == (0, 1)
-    assert body["totals"][f"run_llm_cap|trace:{TRACE}|lifetime"] == 10_500
-
-
-def test_idempotency_keys_are_per_tenant(make_client: Make) -> None:
-    client = make_client(api_keys="a:t1:ingest+read,b:t2:ingest+read")
-    for who in ("a", "b"):
-        response = client.post(
-            "/v1/ledger/events:batch",
-            headers={"Authorization": f"Bearer {who}"},
-            json={"events": [_spent_add("same-key", 7)]},
-        )
-        assert response.json()["accepted"] == 1
+    _post(client, _spent_add(10_500))
+    body = _post(client, _spent_add(10_500)).json()
+    assert body["accepted"] == 1
+    assert "deduped" not in body
+    assert body["totals"][f"run_llm_cap|trace:{TRACE}|lifetime"] == 21_000
 
 
 def test_admit_and_complete_count_inflight(make_client: Make) -> None:
     client = make_client()
     keys = [f"trace:{TRACE}"]
-    _post(client, _conc("i1", "admit"), _conc("i2", "admit"))
+    _post(client, _conc("admit"), _conc("admit"))
     assert _precheck(client, segment_keys=keys, want=["inflight"])["inflight"][keys[0]] == 2
-    _post(client, _conc("i3", "complete"))
+    _post(client, _conc("complete"))
     assert _precheck(client, segment_keys=keys, want=["inflight"])["inflight"][keys[0]] == 1
-    _post(client, _conc("i4", "complete"), _conc("i5", "complete"))
+    _post(client, _conc("complete"), _conc("complete"))
     assert _precheck(client, segment_keys=keys, want=["inflight"])["inflight"][keys[0]] == 0
 
 
@@ -158,7 +146,7 @@ def test_unknown_kind_is_400_and_the_batch_rolls_back(make_client: Make) -> None
     client = make_client()
     response = _post(
         client,
-        _spent_add("ok", 10_500),
+        _spent_add(10_500),
         {"kind": "bogus", "idempotency_key": "x", "trace_id": TRACE},
     )
     assert response.status_code == 400
@@ -170,15 +158,14 @@ def test_unknown_kind_is_400_and_the_batch_rolls_back(make_client: Make) -> None
     assert spent == {f"run_llm_cap|trace:{TRACE}|lifetime": 0}
 
 
-def test_missing_idempotency_key_is_400(make_client: Make) -> None:
+def test_an_event_without_a_kind_is_400(make_client: Make) -> None:
     client = make_client()
-    event = {"kind": "spent_add", "trace_id": TRACE, "delta_micros": 1, "targets": []}
-    assert _post(client, event).status_code == 400
+    assert _post(client, {"trace_id": TRACE, "delta_micros": 1}).status_code == 400
 
 
 def test_batch_over_the_maximum_is_400(make_client: Make) -> None:
     client = make_client(max_batch=2)
-    assert _post(client, *[_spent_add(f"k{i}", 1) for i in range(3)]).status_code == 400
+    assert _post(client, *[_spent_add(1) for i in range(3)]).status_code == 400
 
 
 def _compacted(seq: int, saved: int) -> dict[str, Any]:
@@ -203,15 +190,6 @@ def test_compaction_is_aggregated_per_trace_and_policy(make_client: Make) -> Non
     }
 
 
-def test_a_replayed_compacted_step_does_not_double_count(make_client: Make) -> None:
-    client = make_client()
-    event = _compacted(1, 4_000)
-    _post(client, event)
-    assert _post(client, event).json()["deduped"] == 1
-    stats = client.get(f"/v1/ledger/traces/{TRACE}").json()["policy_stats"]
-    assert stats["context_compaction"]["tokens_saved"] == 4_000
-
-
 def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> None:
     client = make_client()
     trace_id = new_trace_id()
@@ -232,7 +210,7 @@ def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> 
         f"/v1/traces/{trace_id}/spans/{span.span_id}",
         json=span.model_dump(mode="json", exclude_none=True),
     )
-    _post(client, _spent_add("s1", 12_000, trace=trace_id), _step(1, 12_000, trace=trace_id))
+    _post(client, _spent_add(12_000, trace=trace_id), _step(1, 12_000, trace=trace_id))
     client.post(f"/v1/ledger/traces/{trace_id}/halt", json={"reason": "budget"})
 
     (row,) = client.get("/v1/ledger/traces").json()["traces"]
@@ -244,3 +222,11 @@ def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> 
 
     halted = client.get("/v1/ledger/traces", params={"halted_only": True}).json()["traces"]
     assert [t["trace_id"] for t in halted] == [trace_id]
+
+    # The halt is an attribute of the trace itself (ADR 0006), not a separate table.
+    stored = client.get(f"/v1/traces/{trace_id}").json()
+    assert stored["attributes"] == {"tokenops.halted": True, "tokenops.halt_reason": "budget"}
+
+    client.delete(f"/v1/ledger/traces/{trace_id}/halt")
+    assert client.get(f"/v1/traces/{trace_id}").json()["attributes"] == {}
+    assert client.get("/v1/ledger/traces", params={"halted_only": True}).json()["traces"] == []

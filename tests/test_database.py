@@ -20,8 +20,6 @@ DOMAIN_TABLES = {
     "api_keys",
     "budgets",
     "envelopes",
-    "ledger_events",
-    "ledger_halt",
     "ledger_inflight",
     "ledger_spent",
     "policy_instances",
