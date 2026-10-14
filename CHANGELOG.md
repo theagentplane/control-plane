@@ -2,23 +2,74 @@
 
 ## [Unreleased]
 
-**Additive.** Pre-1.0 Chronicle clients and the TokenOps routes are unchanged. New tables and
-columns are created automatically.
+## [1.0.0] - unreleased
 
-Added
-- **Chronicle 1.0 entities on the `agentplane-primitives` schema** (new dependency,
-  `agentplane-primitives==0.1.*`). Documented in [docs/chronicle-api.md](docs/chronicle-api.md):
-  - `POST /v1/traces`: idempotent trace registration, labels written once.
-  - `PUT /v1/traces/{trace_id}/spans/{span_id}`: span upsert at open and close; a closed span is
-    immutable.
-  - `GET /v1/traces/{trace_id}/spans/{span_id}/envelopes`: one span's envelopes in call order, for
-    replay.
-  - `POST /v1/envelopes:batch` validates primitives envelopes with the shared models (400 on the
-    whole batch if one is invalid) and treats an envelope as one record that is mutable until
-    closed. A body without `envelope_status` keeps the legacy path.
-  - `GET /v1/traces/{trace_id}` now also returns `name`, `metadata`, a derived `state` and the
-    trace's `spans`.
-- `spans` table; `span_id` and `state` columns on `envelopes`; `name` on `traces`.
+A rework of the service around the shared primitives schema, with the database owned by Alembic.
+**This release is breaking** (the maintainer chose to drop the pre-1.0 surface rather than carry
+it). Every entry is classified; the migration each consumer needs is given. Pairs with
+`agent-chronicle` 1.0. The TokenOps client is expected to be reworked against this API; until it
+is, TokenOps 0.4 cannot talk to this service.
+
+### Changed (breaking)
+- **Chronicle speaks the `agentplane-primitives` schema** (new dependency,
+  `agentplane-primitives==0.2.*`). Traces, spans and envelopes are validated with the shared models
+  and served back as valid primitives. An envelope in the pre-1.0 Chronicle shape is rejected with
+  `400`. *Migration:* upgrade to `agent-chronicle` 1.0.
+- **A run is a trace.** `run_id` is gone everywhere; `trace_id` is the only run identifier. Halts,
+  per-run state and per-run policy statistics are keyed by `trace_id`; the segment `dimension`
+  `run` is now `trace`; the conventional segment key is `trace:<trace_id>`. Events carry
+  `trace_id`. *Migration:* TokenOps sends `trace_id`.
+- **One database setting.** `CONTROL_PLANE_DATABASE_URL` (a SQLAlchemy URL) replaces
+  `CONTROL_PLANE_DB` and `TOKENOPS_DB`; `--db` is `--database-url`. *Migration:* set the URL
+  (`sqlite:///path/to.db` for an existing SQLite file).
+- **Alembic owns the schema.** The ad-hoc `PRAGMA user_version` migrations are replaced by a
+  versioned baseline. The tables are renamed or reshaped for the new schema (see Removed). There is
+  no in-place data migration from 0.2: start a new database, or re-seed the governance
+  configuration with `control-plane db seed`.
+- **Every table is tenant-scoped**, including segments, budgets and policy instances (they were
+  global before) and the ledger counters.
+- **Ingest is acknowledged after commit.** The `Durability: sync|queued` header and the `durability`
+  field of the response are removed (`queued` was never a queue).
+- **Trace responses** use `metadata` (labels) instead of `dims`, and carry a derived `state`.
+- **The ledger events and halt routes** are under `/v1/ledger/traces/{trace_id}`.
+- Python 3.13 is supported; the package is typed (`py.typed`) and builds with a `src` layout.
+
+### Added
+- **Chronicle 1.0 endpoints** (see [docs/chronicle-api.md](docs/chronicle-api.md)):
+  `POST /v1/traces` (idempotent, labels written once), `PUT /v1/traces/{t}/spans/{s}` (a closed span
+  is immutable), `GET /v1/traces/{t}/spans/{s}/envelopes` (replay), and `POST /v1/envelopes:batch`
+  validating primitives envelopes whole-batch, as one record mutable until closed.
+- **Schema versions:** the current and the previous major of `schema_version` are accepted.
+- **Governance pull** with an `ETag` and `If-None-Match` (`304`), per tenant.
+- `GET /v1/ledger/traces`: the TokenOps run list, a trace list joined with halt, spend and steps.
+- `control-plane db upgrade | current | seed | prune`. `prune` implements retention.
+- `GET /ready` checks the database answers and is at the newest migration.
+- The web page renders envelope sections (input, output, error, usage, metadata) and the spans
+  of a trace.
+- Repository conventions: `AGENTS.md`, ADRs, SHA-pinned CI with a Windows job, zizmor, Dependabot,
+  PR-size notice, `mypy --strict`.
+
+### Removed (breaking)
+- **`step` ledger events, `window` in `precheck`, `state` and `policy_stats` on
+  `GET /v1/ledger/traces/{id}`, and the `steps` field of the run list** (tables `trace_state`
+  and `trace_policy_stats`). The run list carries `span_count` instead. ADR 0009.
+- **Run registration and run records:** `POST /v1/runs`, `GET /v1/runs/{id}/registration`,
+  `PUT`, `PATCH` and `GET /v1/run-records*`, and the `runs` and `run_registrations` tables. They
+  duplicated what a Chronicle trace is. *Migration:* put the run's identity in trace labels at
+  registration; read the run list from `GET /v1/ledger/traces`.
+- **Single-operation ledger routes:** `/v1/ledger/spent*`, `/v1/ledger/inflight*` and
+  `/v1/ledger/halt*`. *Migration:* `events:batch`, `precheck` and the trace halt routes.
+- **Legacy Chronicle ingest** (`node_id`, `dims`, `attributes`, the 2.0 envelope shape) and the
+  pre-2.0 envelope key migration.
+- **Admin routes** `seed-if-empty`, `clear-all`, `clear-governance` and `reseed-governance`;
+  replaced by `/v1/admin/governance/reseed` and `/clear` and the CLI.
+- **TokenOps client code** that lived here (`RemoteStore`, `open_store`, the store protocol) and
+  the **Streamlit dashboard** (the `ui` extra). The built-in web page keeps the TokenOps tab.
+
+### Database
+- Baseline revision `0001`: `traces`, `trace_labels`, `spans`, `envelopes`, `segments`, `budgets`,
+  `policy_instances`, `ledger_spent`, `ledger_inflight`, `api_keys`. A halt is stored in `traces.attributes` (the primitives `Trace.attributes` dict,
+  ADR 0006); there is no halt table and no event deduplication table (ADR 0007).
 
 ## [0.2.2] — 2026-09-19 — persist compaction token savings (#18)
 

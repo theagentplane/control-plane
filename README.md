@@ -3,72 +3,59 @@
 # AgentPlane Control
 
 **The shared control plane for agent traces and spend.**<br>
-Chronicle and TokenOps talk HTTP. Only this process owns SQLite. Agents never open the database file.
+<sub>Stores what Chronicle records, serves it back for query, visualization and replay, and holds the governance TokenOps enforces.</sub>
 
 [![CI](https://github.com/theagentplane/control-plane/actions/workflows/ci.yml/badge.svg)](https://github.com/theagentplane/control-plane/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/agentplane-control-plane.svg)](https://pypi.org/project/agentplane-control-plane/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/theagentplane/control-plane)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-0.x%20%7C%20draft-7B61FF?style=flat-square)](https://semver.org/)
-[![Stars](https://img.shields.io/github/stars/theagentplane/control-plane?style=flat&color=yellow)](https://github.com/theagentplane/control-plane/stargazers)
+[![Typed](https://img.shields.io/badge/typing-strict-informational.svg)](https://peps.python.org/pep-0561/)
 
 <br>
 
-<img src="docs/assets/ui-tokenops.png" alt="AgentPlane Control TokenOps tab: budgets, policies, a halted evaluator-optimizer run, and recent runs" width="720" />
-
-<sub><i>One UI, one SQLite: budgets and policies on the left, a run halted in-path by <code>progress_guard</code> on the right. Chronicle traces live in the next tab.</i></sub>
+[Why](#why) · [How it fits](#how-it-fits) · [Install](#install) · [Quick start](#quick-start) · [API](#api) · [Database](#database) · [Configuration](#configuration) · [Development](#development)
 
 </div>
 
-<br>
+## Why
 
-AgentPlane Control is the **HTTP plane** Chronicle and TokenOps share. Sidecars post envelopes and register runs; the plane stores them; Admin, Chronicle, and TokenOps tabs read the same file. No NFS, no two processes fighting over WAL, no "which DB did that agent open."
+- **One service, one database.** Chronicle and TokenOps are HTTP clients. Agents and browsers never
+  receive a database path or a connection string.
+- **The shared schema.** Traces, spans and envelopes are the
+  [`agentplane-primitives`](https://github.com/theagentplane/primitives) entities, validated with
+  the same models Chronicle builds them with.
+- **A run is a trace.** There is one identifier, `trace_id`. TokenOps governance (budgets, the
+  ledger, halts) is keyed by it; there is no second run table.
+- **Not tied to SQLite.** The database is one SQLAlchemy URL and the schema is owned by Alembic.
+- **Auth when you need it.** With no keys the service is open for the `local` tenant; with keys,
+  every request is tenant-scoped and scope-checked.
 
-**[Why](#why-agentplane-control) · [Architecture](#architecture) · [Install](#install) · [Quick start](#quick-start) · [Sidecars](#sidecars) · [Comparison](#how-it-compares) · [Design](docs/DESIGN.md)**
-
-## Why AgentPlane Control
-
-- **SQLite lives here. Nowhere else.** Chronicle and TokenOps are HTTP clients. They never receive a DB path.
-- **One pane for both products.** Admin keys, Chronicle waterfalls, TokenOps budgets / policies / breaches — same process, same file.
-- **Ingest is a contract, not a dump.** Chronicle writes `POST /v1/envelopes:batch` (`batch_size=1` = flush now) and replays `GET /v1/traces/{id}/envelopes`. TokenOps registers runs, ledger, and governance over `/v1/*`.
-- **Auth when you need it.** Empty key table = local anonymous (all scopes, tenant `local`). Create sidecar keys in Admin, or seed `CONTROL_PLANE_API_KEYS`.
-- **pip in, serve, done.** No Postgres, no login screen, no separate dashboard server.
-
-## Architecture
-
-The plane is one FastAPI process. Agents stay agents.
+## How it fits
 
 ```mermaid
 flowchart LR
     subgraph AGENTS["Agent processes"]
-      C["Chronicle sidecar<br/>RemoteStore"]
-      T["TokenOps sidecar<br/>HttpStore"]
+      C["Chronicle<br/>records and replays"]
+      T["TokenOps<br/>governs"]
     end
-
-    subgraph PLANE["Control plane (:8800)"]
+    subgraph PLANE["Control plane :8800"]
       API["HTTP /v1"]
       UI["Admin · Chronicle · TokenOps"]
-      DB[("SQLite CONTROL_PLANE_DB")]
+      DB[("database<br/>SQLAlchemy + Alembic")]
       API --> DB
       UI --> API
     end
-
-    C -->|"POST /v1/envelopes:batch"| API
-    C -->|"GET /v1/traces/{id}/envelopes"| API
-    T -->|"POST /v1/runs · ledger · governance"| API
+    C -->|"traces, spans, envelopes"| API
+    C -->|"span envelopes (replay)"| API
+    T -->|"pull governance config"| API
+    T -->|"precheck, ledger events"| API
 ```
 
 | Piece | Owns | Does not own |
 |---|---|---|
-| **This plane** (`control-plane serve`) | SQLite, HTTP API, HTML UI | Agent loops, LLM calls, record-and-replay, in-path halt |
-| **[Chronicle](https://github.com/theagentplane/chronicle)** sidecar | Boundaries, envelopes, fixtures | The database file |
-| **[TokenOps](https://github.com/theagentplane/tokenops)** sidecar | `tokenops_run`, `wrap_complete`, ledger client | The database file |
-
-Design notes: [`docs/DESIGN.md`](docs/DESIGN.md).
-
-<img src="docs/assets/ui-chronicle.png" alt="AgentPlane Control Chronicle tab: newest traces first, filter by id or dims" width="720" />
-
-<sub><i>Chronicle tab: newest traces first. Click a row for the time-based waterfall.</i></sub>
+| **This service** | The database, the HTTP API, the web page, migrations | Agent loops, LLM calls, record-and-replay logic |
+| **[Chronicle](https://github.com/theagentplane/chronicle)** | Boundaries, envelopes, replay | The database |
+| **[TokenOps](https://github.com/theagentplane/tokenops)** | Governors and the in-path decisions | The database |
 
 ## Install
 
@@ -76,262 +63,84 @@ Design notes: [`docs/DESIGN.md`](docs/DESIGN.md).
 pip install agentplane-control-plane
 ```
 
-**Prerequisites:** Python 3.10+. Sidecars are separate packages: `agent-chronicle>=0.4.0`, `agent-tokenops>=0.2.0`.
-
-PyPI name is `agentplane-control-plane`; import is `control_plane`; CLI is `control-plane`.
-See [`RELEASING.md`](RELEASING.md) for releases.
-
-Every command below has an equivalent module form that needs nothing on `PATH`:
-
-```bash
-control-plane status            # console script
-python -m control_plane status  # same thing, always available
-```
-
-### If `control-plane` isn't found
-
-`pip` drops the console script into your interpreter's scripts directory
-(`Scripts\` on Windows, `bin/` elsewhere) and **cannot** add that directory to
-`PATH` — no Python package can, so this is not something we can fix from our end.
-pip usually prints a warning when it happens; it is easy to miss.
-
-Three ways out, best first:
-
-```bash
-pipx install agentplane-control-plane   # isolated venv + a bin dir already on PATH
-uv tool install agentplane-control-plane
-python -m control_plane serve           # no install change; works immediately
-```
-
-Or put the directory on `PATH` yourself — `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"`
-prints the one to add.
-
-This bites hardest on Windows with the [Python Install Manager](https://docs.python.org/3/using/windows.html),
-which puts only its `python.exe` shim on `PATH` and leaves each interpreter's
-`Scripts\` off it.
-
-### After upgrading Python
-
-Installs belong to one interpreter. A new Python is a new, empty `site-packages`,
-so **both** forms stop working after an upgrade — `control-plane` as "command not
-found", `python -m control_plane` as the clearer `No module named control_plane`.
-Reinstall into the new interpreter:
-
-```bash
-python -m pip install --upgrade agentplane-control-plane
-```
-
-If you added a scripts directory to `PATH` by hand, note that it is usually
-version-scoped (e.g. `...\pythoncore-3.14-64\Scripts`) and will need updating too.
-`pipx` and `uv` avoid this by pinning their own interpreter.
-
-From a clone:
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-```
+Python 3.10 to 3.13. The sidecars are separate packages (`agent-chronicle>=1.0`).
 
 ## Quick start
 
 ```bash
-control-plane start          # runs in the background; safe to re-run (no-op if already up)
-control-plane status         # pid, port, version, /health
-control-plane stop
+control-plane serve                      # http://127.0.0.1:8800, SQLite file in the working directory
+control-plane start | status | stop      # the same, as a background instance
 ```
 
-Open [http://127.0.0.1:8800/](http://127.0.0.1:8800/) — Admin, Chronicle, TokenOps. No login.
-
-One managed instance per machine user; `start`/`stop`/`status` track it via a small
-state file (`platformdirs` user-state dir) and a PID — `stop` never touches a process
-it didn't start. Logs go to a file next to the state (path printed by `start`), since
-the process is detached from your terminal.
-
-Prefer the foreground, un-managed form for scripting, containers, or when you want
-Ctrl-C to stop it:
-
-```bash
-control-plane serve --port 8800 --db control_plane.db
-```
-
-`control-plane ui` is a pointer, not a second server: the HTML UI is served with the API.
-
-## Docker
-
-For hosting (a shared team plane, a demo environment) rather than a local dev loop:
-
-```bash
-docker compose up -d      # builds the image, starts on :8800, persists SQLite in a volume
-docker compose logs -f
-docker compose down       # add -v to also drop the data volume
-```
-
-Or without Compose:
-
-```bash
-docker build -t agentplane-control-plane .
-docker run -d --name control-plane -p 8800:8800 -v control-plane-data:/data agentplane-control-plane
-```
-
-The image's entrypoint is `control-plane serve` (foreground, PID 1) — **not** `start`.
-Docker/Kubernetes is already the process supervisor here (restart policy, health
-checks via the built-in `HEALTHCHECK` hitting `/health`, log collection from
-stdout/stderr); `start`/`stop`/`status` are for running the plane directly on a
-developer's machine, where nothing else is supervising the process. Don't run them
-inside the container — a background/detached mode would exit PID 1 as soon as it
-spawned its child, and the container would exit with it.
-
-Set `CONTROL_PLANE_API_KEYS` before exposing the container beyond localhost — the
-default (empty) is anonymous, all-scopes access.
-
-## Sidecars
-
-Point both libraries at the same origin. Do **not** set a SQLite path on the agents.
-
-```bash
-export CONTROL_PLANE_URL=http://127.0.0.1:8800
-# TokenOps also honors TOKENOPS_URL; leave TOKENOPS_EMBEDDED unset
-```
-
-**Chronicle** — flush every envelope to the plane:
+The first start creates the schema (Alembic) and seeds the default governance configuration for
+tenant `local`. Point Chronicle at it:
 
 ```python
-import os
 import chronicle
-from chronicle import RemoteStore
 
-store = RemoteStore(os.environ["CONTROL_PLANE_URL"], batch_size=1)
-with chronicle.record("my-run", store=store):
-    ...
+chronicle.configure(control_plane_url="http://127.0.0.1:8800", api_key="...")
 ```
 
-**TokenOps** — register runs and share the ledger over HTTP:
+Open `http://127.0.0.1:8800/` for the Admin, Chronicle and TokenOps tabs.
 
-```python
-from tokenops import ControlPlaneClient, tokenops_run
+## API
 
-client = ControlPlaneClient.from_env()  # CONTROL_PLANE_URL or TOKENOPS_URL
-with tokenops_run(client=client) as bound:
-    ...
-```
+Full reference: [docs/chronicle-api.md](docs/chronicle-api.md) and
+[docs/governance-api.md](docs/governance-api.md). Interactive docs are served at `/docs`.
 
-Auth off until you create a key. Then:
+| Group | Routes |
+|---|---|
+| **Chronicle** (primitives) | `POST /v1/traces` · `PUT /v1/traces/{t}/spans/{s}` · `POST /v1/envelopes:batch` · `GET /v1/traces` · `GET /v1/traces/{t}` · `GET /v1/traces/{t}/envelopes` · `GET /v1/traces/{t}/spans/{s}/envelopes` |
+| **Governance** (the pull) | `GET /v1/governance/{agent}` (ETag) · CRUD on `/v1/segments`, `/v1/budgets`, `/v1/policies` |
+| **Ledger** | `POST /v1/ledger/precheck` · `POST /v1/ledger/events:batch` · `GET /v1/ledger/traces` · halt routes on `/v1/ledger/traces/{t}/halt` |
+| **Admin** | `/v1/admin/keys` · `POST /v1/admin/governance/reseed` and `/clear` |
+| **Probes** | `GET /health` · `GET /ready` |
+
+## Database
+
+The database is selected by one SQLAlchemy URL, `CONTROL_PLANE_DATABASE_URL`
+(default `sqlite:///control_plane.db`). The code uses SQLAlchemy Core only and no dialect-specific
+SQL outside the engine factory, so it is not bound to one engine. SQLite is what the test suite
+runs on; other databases need their own driver installed.
+
+The schema is owned by **Alembic**; the migrations ship inside the package:
 
 ```bash
-export CONTROL_PLANE_API_KEYS='chron:local:ingest+read,tops:local:ingest+read,admin:local:read+admin'
-export CONTROL_PLANE_API_KEY=chron   # Chronicle / TokenOps sidecar
+control-plane db upgrade             # apply migrations (also done at startup, CONTROL_PLANE_AUTO_MIGRATE)
+control-plane db current             # the revision the database is at
+control-plane db seed [--file F] [--tenant T] [--reset]   # governance config from YAML
+control-plane db prune --older-than-days 30               # retention; nothing runs in the background
 ```
 
-Or create keys in the Admin tab (secret shown once).
+## Configuration
 
-## API callers
+| Variable | Default | Meaning |
+|---|---|---|
+| `CONTROL_PLANE_DATABASE_URL` | `sqlite:///control_plane.db` | SQLAlchemy URL of the database |
+| `CONTROL_PLANE_AUTO_MIGRATE` | `true` | Run `alembic upgrade head` at startup |
+| `CONTROL_PLANE_SEED_ON_START` | `true` | Seed the default governance config for tenant `local` if it has none |
+| `CONTROL_PLANE_API_KEYS` | empty | `key:tenant:scope+scope,...` (scopes: `ingest`, `read`, `admin`) |
+| `CONTROL_PLANE_MAX_BATCH` | `100` | Largest `envelopes:batch` or `events:batch` |
+| `CONTROL_PLANE_MAX_BODY` | `4194304` | Largest request body in bytes |
+| `CONTROL_PLANE_RETENTION_DAYS` | none | Default age for `db prune` |
 
-Every route has one caller class. Agents do not scrape the UI.
+## Development
 
-| Route | Caller |
-|---|---|
-| `POST /v1/envelopes:batch` | Chronicle sidecar (only ingest API) |
-| `GET /v1/traces/{id}/envelopes` | Chronicle sidecar (fixture replay) and Chronicle waterfall |
-| `GET /v1/traces` | Chronicle UI search |
-| `POST /v1/runs`, ledger, governance, run-records | TokenOps sidecar |
-| segments / budgets / policies, admin keys | UI |
-
-## How it compares
-
-This is not a gateway, not a SaaS, and not a replacement for Chronicle or TokenOps. It is the **shared store + UI** those two already assume.
-
-| | AgentPlane Control | TokenOps embedded SQLite | Langfuse / Phoenix |
-|---|:---:|:---:|:---:|
-| Primary focus | Shared plane (traces + spend) | Governance in one process | Observe / traces |
-| Agents open the DB file | No | Yes (same `TOKENOPS_DB`) | N/A (hosted or collector) |
-| Chronicle + TokenOps one UI | Yes | TokenOps UI only | No |
-| In-path halt / mutate | Via TokenOps sidecar | Yes | No (analytics) |
-| Record-and-replay fixtures | Via Chronicle sidecar | No | No |
-| Requires hosted SaaS | No | No | Often |
-
-What this does **not** do: call models, wrap `complete`, record boundaries, or host a multi-tenant cloud for you. Fail-closed auth is opt-in (create keys). The HTTP contract is still 0.x.
-
-## Environment variables
-
-<details>
-<summary>Command and env reference</summary>
-
-| Variable | Purpose |
-|---|---|
-| `CONTROL_PLANE_DB` | SQLite path (or `control-plane serve --db`) |
-| `CONTROL_PLANE_URL` | Sidecar base URL (`http://127.0.0.1:8800`) |
-| `CONTROL_PLANE_API_KEYS` | Seed keys: `name:tenant:scope+scope` |
-| `CONTROL_PLANE_API_KEY` | Bearer the sidecar sends |
-| `CONTROL_PLANE_CONFIG` | Governance YAML seed (else packaged `default.yaml`) |
-| `TOKENOPS_URL` | TokenOps alias for the same origin |
-| `TOKENOPS_API_KEY` | TokenOps alias for the Bearer |
-| `TOKENOPS_EMBEDDED` | Must be **unset** when using this plane |
-
-```
-control-plane serve [--host 127.0.0.1] [--port 8800] [--db PATH] [--reload]
-```
-
-</details>
-
-## Roadmap
-
-The plane is early (0.x). Near-term:
-
-- Harden SQLite under concurrent sidecar writes (`busy_timeout`, WAL discipline).
-- Admin: persist the browser key so a refresh does not 401.
-- Keep the HTTP contract stable enough for Chronicle 0.4 and TokenOps 0.2.
-
-Ideas welcome via GitHub issues.
-
-## Compatibility
-
-| agentplane-control-plane | tokenops | agent-chronicle | notes |
-|---|---|---|---|
-| 0.1.x | ≤ 0.2.1 | ≥ 0.3.0 | single-op `/v1/ledger/*`, `PUT /v1/run-records` |
-| **0.2.x** | ≤ 0.2.1 **and** `<next>` | ≥ 0.3.0 | **additive** — old clients keep working; adds `precheck` / `events:batch`, `run_state`, `data_scope` |
-| [0.3.x](https://github.com/theagentplane/control-plane/issues/11) | `<next>`+ only | ≥ 0.3.0 | breaking — drops `run_registrations`, `PUT /v1/run-records`, legacy ledger wrappers |
-
-### Breaking changes
-
-- **0.2.0 → 0.3.0:** `run_registrations` folded into `runs` and dropped;
-  `PUT /v1/run-records` (`create_run`) removed; `PATCH /v1/run-records` rejects
-  `steps` / `cost_micros` (0.2.x only ignores them); legacy `/v1/ledger/halt/*` and
-  single-op `/v1/ledger/{spent,inflight}/*` writes removed. Runs as an automatic
-  `PRAGMA user_version` v3 migration. Released only after `tokenops <next>` stops
-  calling `create_run`.
-
-Full contract: [`docs/api-contract.md`](docs/api-contract.md).
-
-## Documentation
-
-- [API contract](docs/api-contract.md) — the TokenOps ⇄ control-plane wire spec
-- [Design](docs/DESIGN.md) — storage, callers, scopes, keys
-- [Releasing](RELEASING.md) — Trusted Publishing to PyPI
-- [Changelog](CHANGELOG.md)
-- [Chronicle](https://github.com/theagentplane/chronicle) · [TokenOps](https://github.com/theagentplane/tokenops)
-
-## Contributing
-
-Issues and PRs are welcome.
+Uses [uv](https://docs.astral.sh/uv/). On Windows use `python -m pytest`.
 
 ```bash
-pip install -e ".[dev]"
-ruff check control_plane tests
-pytest -v
+uv sync
+uv run python -m pytest --cov
+uv run ruff check . && uv run ruff format --check .
+uv run python -m mypy
+uv build && uv run twine check dist/*
 ```
 
-## Contributors
+Architecture decisions are in [docs/adr](docs/adr/README.md); agents working in this repository
+read [AGENTS.md](AGENTS.md) first.
 
-Thanks to everyone who has contributed.
+## Related
 
-[![Contributors](https://contrib.rocks/image?repo=theagentplane/control-plane)](https://github.com/theagentplane/control-plane/graphs/contributors)
-
----
-
-If this is the missing box between your agents and the database, please [⭐ star the repo](https://github.com/theagentplane/control-plane) so more people can find it.
-
-<div align="center">
-
-Built by Susheem Koul and Tisha Chawla
-
-</div>
+[chronicle](https://github.com/theagentplane/chronicle) ·
+[primitives](https://github.com/theagentplane/primitives) ·
+[tokenops](https://github.com/theagentplane/tokenops)

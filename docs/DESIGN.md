@@ -1,87 +1,68 @@
 # Control plane design
 
-SQLite lives **only** inside this process. Chronicle and TokenOps are facets
-(agent sidecars + UI tabs), never database clients.
+The control plane is one HTTP service in front of one database. Chronicle and TokenOps are its
+clients; agents and browsers never receive a database path or a connection string.
 
-## Storage
+## Layers
 
-One SQLite file (`CONTROL_PLANE_DB`, default `control_plane.db`). WAL.
-No Postgres. Agents and the browser never receive a DB path.
+Each layer imports only from the ones before it.
 
-Local/dev: run `control-plane serve`. Clients talk HTTP.
-`TOKENOPS_EMBEDDED=1` remains TokenOps-only for unit tests that never start this service.
+| Layer | Package | Responsibility |
+|---|---|---|
+| Settings and auth types | `settings`, `auth` | Environment, principals, scopes |
+| Database | `db` | Table definitions, engine factory, Alembic migrations |
+| Repositories | `repositories` | All queries, one repository per concept, tenant-scoped |
+| API | `api` | FastAPI routers; validation with primitives models |
+| Interfaces | `web`, `cli` | The browser page and the command line |
 
 ## Callers
 
-Every HTTP route is owned by exactly one caller class:
-
 | Caller | Who | Scopes |
 |---|---|---|
-| `agent-chronicle` | Chronicle sidecar in the agent | `ingest` write, `read` for fixture replay |
-| `agent-tokenops` | TokenOps sidecar in the agent | `ingest` write, `read` for governance/ledger |
-| `ui` | Control plane Admin / Chronicle / TokenOps tabs | `read` + `admin` |
+| `agent-chronicle` | The SDK in the agent | `ingest` to write, `read` for replay |
+| `agent-tokenops` | The sidecar in the agent | `read` to pull configuration and precheck, `ingest` to write ledger events |
+| the web page | Admin, Chronicle and TokenOps tabs | `read` and `admin` |
 
 ## Chronicle
 
-Agent needs two things:
-
-1. **Ingest** — `POST /v1/envelopes:batch` is the **only** ingest API.
-   Client `batch_size=1` means flush every envelope (still the batch route).
-2. **Replay fixture** — `GET /v1/traces/{trace_id}/envelopes` returns the full
-   ordered envelope list for that trace (enough to stub-replay).
-
-UI (same process as the DB, but talks HTTP so the split stays honest):
-
-- `GET /v1/traces` search / filter / sort
-- `GET /v1/traces/{trace_id}` summary
-- `GET /v1/traces/{trace_id}/envelopes` waterfall
-
-No unbounded `GET /envelopes`. No single-envelope `POST`.
+- **Ingest:** trace registration (idempotent, labels once), span upsert, `envelopes:batch`. An
+  envelope is one record, mutable until closed. Acknowledged after commit.
+- **Replay:** `GET /v1/traces/{t}/spans/{s}/envelopes` is the one read replay needs.
+- **UI:** trace search, a trace with its spans, and the envelope waterfall.
+- Entities are the `agentplane-primitives` models; payload versions `major.minor` are accepted for
+  the current and the previous major.
 
 ## TokenOps
 
-Full spec: [`api-contract.md`](api-contract.md).
+- **The pull:** `GET /v1/governance/{agent}` returns the exact dict `build_governor` consumes, with
+  an ETag. The configuration (segments, budgets, policy instances) is per tenant and lives in the
+  database; it is seeded from YAML and edited through the API or the TokenOps tab.
+- **The ledger:** `precheck` (one read) and `events:batch` (one write per crossing, applied in one transaction)
+  hold spend and in-flight counts. A halt is stored
+  in the trace's `attributes` (ADR 0006).
+- **A run is a trace.** There is no run registration or run record; the run list is the trace
+  list joined with ledger facts.
 
-Agent (0.2.x):
+## Database
 
-- `POST /v1/runs` register (`intent`, `user_dims`, `mode`) → returns the full record
-  incl. `registered_at`
-- `GET /v1/runs/{id}/registration`
-- `GET /v1/governance/{agent}` — policy params now carry `data_scope` (`local`|`global`)
-- `POST /v1/ledger/precheck` — one read per pre_call pass (halt + spent + inflight
-  + optional window)
-- `POST /v1/ledger/events:batch` — one write per crossing (`spent_add` / `admit` /
-  `complete` / `step` / `halt_mark` / `halt_clear`), idempotent
-- `GET|POST|DELETE /v1/ledger/runs/{id}/halt`
-- `PATCH /v1/run-records/{id}` — status / ended_at / halt_reason / detector /
-  governance_events (`steps` / `cost_micros` are derived, ignored)
-- Legacy, deprecated → removed in 0.3.0: single-op `/v1/ledger/{spent,inflight,halt}/*`,
-  `PUT /v1/run-records`
-
-UI:
-
-- CRUD `/v1/segments|budgets|policies`
-- `GET /v1/run-records` (+ `problematic_only`)
-- `POST /v1/admin/seed-if-empty|reseed-governance|clear-*`
-
-TokenOps SDK uses HTTP for all of the above when `TOKENOPS_URL` /
-`CONTROL_PLANE_URL` is set. It must not open SQLite in that mode.
-
-## UI
-
-Same FastAPI process serves a small HTML app (component CSS in
-`control_plane/web/static`). No login screen.
-
-| Tab | Role |
-|---|---|
-| **Admin** | Sidecar API keys (Chronicle / TokenOps / UI). Create, list, revoke. |
-| **Chronicle** | Trace search, lookup, waterfall. |
-| **TokenOps** | Budgets, policies, segments; run list with breaches. |
+- One SQLAlchemy URL (`CONTROL_PLANE_DATABASE_URL`). SQLAlchemy Core only; no raw SQL strings and
+  no dialect-specific SQL outside `db/engine_utils.py`.
+- **Alembic owns the schema.** Migrations ship in the package and run at startup (and with
+  `control-plane db upgrade`). Revisions avoid dialect-specific SQL and use batch mode for SQLite.
+- Counters are single atomic `UPDATE ... SET n = n + delta` statements; upserts are "update, then
+  insert in a SAVEPOINT". Both are portable, so concurrent writers on any database cannot lose an
+  increment.
+- Times are stored as naive UTC and returned as aware UTC (`UtcDateTime`), so every dialect behaves
+  the same.
 
 ## Keys
 
-Keys are stored hashed in SQLite (prefix shown after create). Env
-`CONTROL_PLANE_API_KEYS` still seeds. Empty key table = local anonymous
-dev (all scopes, tenant `local`).
+Keys are stored hashed (prefix shown after create). `CONTROL_PLANE_API_KEYS` seeds environment
+keys (`name:tenant:scope+scope`). With no environment keys and no stored keys the service is open:
+anonymous, tenant `local`, all scopes, for a single trusted local host only.
 
-Format: `name:tenant:scope+scope` in env; generated keys are random tokens.
+## Retention
+
+Replay reads traces from the database, so retention matters. `control-plane db prune
+--older-than-days N` deletes traces last touched before the cutoff and everything keyed by them.
+Nothing prunes in the background.

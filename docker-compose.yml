@@ -11,6 +11,8 @@ services:
       # scopes (fine for a single trusted host; set real keys before exposing this
       # beyond localhost).
       CONTROL_PLANE_API_KEYS: ""
+      # Any SQLAlchemy URL. The default is the SQLite file on the volume below.
+      CONTROL_PLANE_DATABASE_URL: sqlite:////data/control_plane.db
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8800/health', timeout=2)"]
       interval: 10s
