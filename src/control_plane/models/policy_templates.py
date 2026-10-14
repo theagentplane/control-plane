@@ -1,9 +1,8 @@
-"""Known TokenOps policy template names (allowlist for Admin / store upsert).
+"""Known TokenOps policy template names (the allow-list for configuration writes).
 
-Governor builders stay in TokenOps; the plane only validates template names.
+The governors themselves live in TokenOps; the control plane only validates the template name so
+a typo fails at write time instead of silently never applying.
 """
-
-from __future__ import annotations
 
 POLICY_TEMPLATES: frozenset[str] = frozenset(
     {

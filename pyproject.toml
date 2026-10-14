@@ -4,55 +4,51 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentplane-control-plane"
-version = "0.2.2"
-description = "Shared AgentPlane control plane: Chronicle envelopes + TokenOps governance over HTTP."
+dynamic = ["version"]
+description = "The AgentPlane control plane: stores Chronicle traces and serves TokenOps governance over HTTP."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-  { name = "Susheem Koul" },
-  { name = "Tisha Chawla" },
+    { name = "Susheem Koul" },
+    { name = "Tisha Chawla" },
 ]
 keywords = [
-  "llm",
-  "agents",
-  "control-plane",
-  "observability",
-  "governance",
-  "chronicle",
-  "tokenops",
+    "llm",
+    "agents",
+    "control-plane",
+    "observability",
+    "governance",
+    "chronicle",
+    "tokenops",
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Software Development :: Libraries :: Python Modules",
-  "Topic :: System :: Systems Administration",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
 ]
 dependencies = [
-  "agentplane-primitives==0.1.*",
-  "fastapi>=0.115",
-  "uvicorn[standard]>=0.32",
-  "pydantic>=2",
-  "httpx>=0.27",
-  "pyyaml>=6",
-  "jinja2>=3.1",
-  "psutil>=5.9",
-  "platformdirs>=4.0",
-]
-
-[project.optional-dependencies]
-ui = ["streamlit>=1.32", "pandas>=2"]
-dev = [
-  "pytest>=8",
-  "httpx>=0.27",
-  "ruff==0.15.22",
-  "build>=1.2",
-  "twine>=6",
+    # Pre-1.0 rule: pin the exact minor of primitives.
+    "agentplane-primitives==0.1.*",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.13,<2",
+    "pydantic>=2.6,<3",
+    "httpx>=0.27,<1",
+    "pyyaml>=6",
+    "jinja2>=3.1",
+    "psutil>=5.9",
+    "platformdirs>=4.0",
 ]
 
 [project.urls]
@@ -64,16 +60,95 @@ Changelog = "https://github.com/theagentplane/control-plane/blob/main/CHANGELOG.
 [project.scripts]
 control-plane = "control_plane.cli:main"
 
+# PEP 735 dependency groups: development-only, never part of the published metadata.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "build>=1.2",
+    "twine>=5",
+    "pre-commit>=4",
+    "types-PyYAML",
+    "types-psutil",
+]
+
+[tool.hatch.version]
+path = "src/control_plane/_version.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["control_plane"]
+packages = ["src/control_plane"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"config/default.yaml" = "control_plane/default.yaml"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/control_plane",
+    "docs",
+    "tests",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+]
 
 [tool.ruff]
 line-length = 100
-src = ["control_plane", "tests"]
+src = ["src", "tests"]
+target-version = "py310"
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "C4",  # comprehensions
+    "PT",  # pytest style
+    "RUF", # ruff-specific
+]
+# Migrations are generated and keep Alembic's layout.
+exclude = ["src/control_plane/db/migrations/versions"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["control_plane"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI reads dependencies from default arguments.
+"src/control_plane/api/*" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+exclude = ["src/control_plane/db/migrations/versions"]
+
+[[tool.mypy.overrides]]
+module = ["alembic.*", "agent_chronicle.*", "chronicle.*", "uvicorn.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+markers = [
+    "chronicle: runs the agent-chronicle end-to-end systems against this service",
+]
+
+[tool.coverage.run]
+source = ["control_plane"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
