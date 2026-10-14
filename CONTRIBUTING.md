@@ -26,6 +26,10 @@ uv build && uv run twine check dist/*
 
 On Windows use `python -m pytest`; it is the reliable invocation.
 
+CI also runs Chronicle's own end-to-end tests against this checkout (the `chronicle-e2e` job,
+pinned to a Chronicle release in `ci.yml`). To run them locally, install this checkout into a
+Chronicle clone and run `tests/e2e/test_real_control_plane.py` there.
+
 ## Ground rules
 
 - **Read [AGENTS.md](AGENTS.md) and the [ADRs](docs/adr/README.md) first.** Never rewrite an

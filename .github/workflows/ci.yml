@@ -100,3 +100,36 @@ jobs:
         run: |
           unzip -l dist/*.whl | grep -q "control_plane/py.typed"
           unzip -l dist/*.whl | grep -q "control_plane/db/migrations/versions/"
+
+  chronicle-e2e:
+    name: Chronicle end-to-end tests against this control plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The Chronicle release whose real-control-plane tests run against this checkout.
+      CHRONICLE_REF: v1.0.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control-plane
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: theagentplane/chronicle
+          ref: ${{ env.CHRONICLE_REF }}
+          path: chronicle
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: chronicle/pyproject.toml
+      - name: Install Chronicle's test environment and this control plane
+        working-directory: chronicle
+        run: |
+          uv sync
+          uv pip install -e ../control-plane
+      - name: Run the real-control-plane tests
+        working-directory: chronicle
+        run: uv run --no-sync python -m pytest tests/e2e/test_real_control_plane.py -q
