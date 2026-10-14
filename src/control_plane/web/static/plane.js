@@ -410,12 +410,12 @@ async function renderTokenops() {
       renderTokenops();
     };
     const list = (title, data) => `<div class="card"><h2>${title}</h2>
-      <table><thead><tr><th>Trace</th><th>Name</th><th>State</th><th>Spent</th><th>Steps</th><th>Halt</th></tr></thead><tbody>
+      <table><thead><tr><th>Trace</th><th>Name</th><th>State</th><th>Spent</th><th>Spans</th><th>Halt</th></tr></thead><tbody>
       ${((data && data.traces) || []).map((r) => `<tr class="clickable" data-tr="${esc(r.trace_id)}">
         <td class="mono">${esc(r.trace_id)}</td><td>${esc(r.name || "")}</td>
         <td>${r.halted ? pill("halted") : pill(r.state)}</td>
         <td>$${((r.spent_micros || 0) / 1e6).toFixed(4)}</td>
-        <td>${r.steps || 0}</td>
+        <td>${r.span_count || 0}</td>
         <td>${esc(r.halt_reason || "")}</td>
       </tr>`).join("") || `<tr><td colspan="6">None</td></tr>`}
       </tbody></table></div>`;

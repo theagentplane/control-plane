@@ -49,10 +49,10 @@ of the known TokenOps templates, otherwise the write is a `400`.
 
 | Route | Scope | Purpose |
 |---|---|---|
-| `POST /v1/ledger/precheck` | read | One read for a pre-call pass: `halted`, `spent`, `inflight`, `window` |
+| `POST /v1/ledger/precheck` | read | One read for a pre-call pass: `halted`, `spent`, `inflight` |
 | `POST /v1/ledger/events:batch` | ingest | One write per crossing |
-| `GET /v1/ledger/traces` | read | Recent traces with halt, spend and step count (the TokenOps run list); `halted_only` |
-| `GET /v1/ledger/traces/{trace_id}` | read | One trace's halt, state and per-policy statistics |
+| `GET /v1/ledger/traces` | read | Recent traces with halt and spend (the TokenOps run list); `halted_only` |
+| `GET /v1/ledger/traces/{trace_id}` | read | One trace's halt |
 | `GET`, `POST`, `DELETE /v1/ledger/traces/{trace_id}/halt` | read, ingest, admin | Read, set and clear a halt |
 
 ### `precheck`
@@ -60,7 +60,7 @@ of the known TokenOps templates, otherwise the write is a `400`.
 ```json
 {"trace_id": "<32 hex>", "segment_keys": ["trace:<id>"],
  "budgets": [{"budget_id": "run_llm_cap", "segment_key": "trace:<id>", "period": "lifetime"}],
- "want": ["spent", "inflight", "halt", "window"]}
+ "want": ["spent", "inflight", "halt"]}
 ```
 
 ### `events:batch`
@@ -75,12 +75,11 @@ outcome it does not know without accepting a possible double count. The response
 |---|---|
 | `spent_add` | `trace_id`, `delta_micros`, `targets: [{budget_id, segment_key, period}]` |
 | `admit`, `complete` | `trace_id`, `segment_key` (in-flight counter, never below zero) |
-| `step` | `trace_id`, `agent`, `seq`, `cost_micros`, `cum_spent_micros`, `compaction?` ... |
 | `halt_mark` | `trace_id`, `reason` |
 | `halt_clear` | `trace_id` |
 
-`step` events feed the per-trace window (the last 64 steps and a spend velocity) and, when they
-carry `compaction`, the per-policy statistics.
+An unknown `kind` is a `400`. TokenOps 0.4 `step` events are no longer accepted: step windows and
+per-policy statistics are not stored here (ADR 0009).
 
 ## Segment keys
 

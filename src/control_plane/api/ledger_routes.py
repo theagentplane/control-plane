@@ -24,7 +24,7 @@ def precheck(
     principal: Principal = Depends(require_scopes("read")),
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
-    """Halt, spend, in-flight and window for one trace in a single read."""
+    """Halt, spend and in-flight for one trace in a single read."""
     return state.repos.ledger.precheck(
         principal.tenant_id,
         body.trace_id,
@@ -41,7 +41,7 @@ def events_batch(
     principal: Principal = Depends(require_scopes("ingest")),
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
-    """Apply ledger events (``spent_add``, ``admit``, ``complete``, ``step``, ``halt_*``)."""
+    """Apply ledger events (``spent_add``, ``admit``, ``complete``, ``halt_*``)."""
     if int(request.headers.get("content-length") or 0) > state.settings.max_body_bytes:
         raise HTTPException(status_code=413, detail="payload too large")
     if len(body.events) > state.settings.max_batch:
@@ -80,15 +80,13 @@ def ledger_trace(
     principal: Principal = Depends(require_scopes("read")),
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
-    """One trace's halt, state and per-policy statistics."""
+    """One trace's halt."""
     tenant = principal.tenant_id
     halted, reason = state.repos.ledger.halt_status(tenant, trace_id)
     return {
         "trace_id": trace_id,
         "halted": halted,
         "halt_reason": reason,
-        "state": state.repos.ledger.state(tenant, trace_id),
-        "policy_stats": state.repos.ledger.policy_stats(tenant, trace_id),
     }
 
 

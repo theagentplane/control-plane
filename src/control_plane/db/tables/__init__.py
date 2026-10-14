@@ -8,8 +8,6 @@ from control_plane.db.tables.governance_tables import (
     ledger_spent,
     policy_instances,
     segments,
-    trace_policy_stats,
-    trace_state,
 )
 
 __all__ = [
@@ -22,7 +20,5 @@ __all__ = [
     "segments",
     "spans",
     "trace_labels",
-    "trace_policy_stats",
-    "trace_state",
     "traces",
 ]

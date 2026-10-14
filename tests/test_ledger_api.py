@@ -37,20 +37,6 @@ def _conc(kind: str, *, trace: str = TRACE) -> dict[str, Any]:
     }
 
 
-def _step(seq: int, cum: int, *, trace: str = TRACE) -> dict[str, Any]:
-    return {
-        "kind": "step",
-        "trace_id": trace,
-        "agent": "researcher",
-        "seq": seq,
-        "node_type": "llm",
-        "boundary_id": "researcher.chat",
-        "cost_micros": 10_500,
-        "cum_spent_micros": cum,
-        "ts": float(seq),
-    }
-
-
 def _post(client: TestClient, *events: dict[str, Any]) -> Any:
     return client.post("/v1/ledger/events:batch", json={"events": list(events)})
 
@@ -99,23 +85,6 @@ def test_admit_and_complete_count_inflight(make_client: Make) -> None:
     assert _precheck(client, segment_keys=keys, want=["inflight"])["inflight"][keys[0]] == 1
     _post(client, _conc("complete"), _conc("complete"))
     assert _precheck(client, segment_keys=keys, want=["inflight"])["inflight"][keys[0]] == 0
-
-
-def test_steps_build_the_trace_window(make_client: Make) -> None:
-    client = make_client()
-    _post(client, _step(1, 10_500), _step(2, 21_000))
-    window = _precheck(client, want=["window"])["window"]
-    assert window["step_count"] == 2
-    assert len(window["recent"]) == 2
-    assert window["velocity_micros_per_step"] == 10_500.0
-
-
-def test_the_window_is_bounded(make_client: Make) -> None:
-    client = make_client()
-    _post(client, *[_step(i, i * 100) for i in range(1, 71)])
-    window = _precheck(client, want=["window"])["window"]
-    assert window["step_count"] == 70
-    assert len(window["recent"]) == 64
 
 
 def test_halt_mark_shows_in_the_ack_and_the_halt_route(make_client: Make) -> None:
@@ -168,28 +137,6 @@ def test_batch_over_the_maximum_is_400(make_client: Make) -> None:
     assert _post(client, *[_spent_add(1) for i in range(3)]).status_code == 400
 
 
-def _compacted(seq: int, saved: int) -> dict[str, Any]:
-    event = _step(seq, seq * 10_500)
-    event["compaction"] = {
-        "tokens_before": saved + 8_000,
-        "tokens_after": 8_000,
-        "tokens_saved": saved,
-    }
-    return event
-
-
-def test_compaction_is_aggregated_per_trace_and_policy(make_client: Make) -> None:
-    client = make_client()
-    _post(client, _compacted(1, 4_000), _step(2, 21_000), _compacted(3, 1_000))
-    stats = client.get(f"/v1/ledger/traces/{TRACE}").json()["policy_stats"]
-    assert stats["context_compaction"] == {
-        "tokens_before": 12_000 + 9_000,
-        "tokens_after": 16_000,
-        "tokens_saved": 5_000,
-        "calls": 2,
-    }
-
-
 def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> None:
     client = make_client()
     trace_id = new_trace_id()
@@ -210,7 +157,7 @@ def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> 
         f"/v1/traces/{trace_id}/spans/{span.span_id}",
         json=span.model_dump(mode="json", exclude_none=True),
     )
-    _post(client, _spent_add(12_000, trace=trace_id), _step(1, 12_000, trace=trace_id))
+    _post(client, _spent_add(12_000, trace=trace_id))
     client.post(f"/v1/ledger/traces/{trace_id}/halt", json={"reason": "budget"})
 
     (row,) = client.get("/v1/ledger/traces").json()["traces"]
@@ -218,7 +165,7 @@ def test_the_run_list_is_the_trace_list_with_ledger_facts(make_client: Make) -> 
     assert row["metadata"] == {"user_id": "u1"}
     assert (row["halted"], row["halt_reason"]) == (True, "budget")
     assert row["spent"] == {"__trace_total__": 12_000, "run_llm_cap": 12_000}
-    assert (row["spent_micros"], row["steps"]) == (12_000, 1)
+    assert (row["spent_micros"], row["span_count"]) == (12_000, 1)
 
     halted = client.get("/v1/ledger/traces", params={"halted_only": True}).json()["traces"]
     assert [t["trace_id"] for t in halted] == [trace_id]

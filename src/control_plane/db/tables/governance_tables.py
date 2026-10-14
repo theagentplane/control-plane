@@ -1,9 +1,8 @@
 """Governance tables: configuration TokenOps pulls, and the shared ledger it writes.
 
 Configuration (segments, budgets, policy instances) is what an agent running TokenOps fetches
-with ``GET /v1/governance/{agent}``. The ledger (spend, in-flight counts, per-trace state and
-per-trace policy statistics) is what agents share across processes. A run is a Chronicle
-trace, so everything per run is keyed by ``trace_id``; there is no separate run table.
+with ``GET /v1/governance/{agent}``. The ledger (spend and in-flight counts) is what agents share across processes. A run is a
+Chronicle trace, so everything per run is keyed by ``trace_id``; there is no separate run table.
 """
 
 from sqlalchemy import (
@@ -11,7 +10,6 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
-    Float,
     Integer,
     PrimaryKeyConstraint,
     String,
@@ -77,26 +75,4 @@ ledger_inflight = Table(
     Column("segment_key", String(255), nullable=False),
     Column("count", Integer, nullable=False, server_default="0"),
     PrimaryKeyConstraint("tenant_id", "segment_key", name="pk_ledger_inflight"),
-)
-
-trace_state = Table(
-    "trace_state",
-    metadata,
-    Column("tenant_id", String(64), nullable=False),
-    Column("trace_id", String(32), nullable=False),
-    Column("step_count", Integer, nullable=False, server_default="0"),
-    Column("window", JSON, nullable=False),
-    Column("velocity_micros_per_step", Float, nullable=False, server_default="0"),
-    Column("last_ts", Float),
-    PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_trace_state"),
-)
-
-trace_policy_stats = Table(
-    "trace_policy_stats",
-    metadata,
-    Column("tenant_id", String(64), nullable=False),
-    Column("trace_id", String(32), nullable=False),
-    Column("policy", String(64), nullable=False),
-    Column("stats", JSON, nullable=False),
-    PrimaryKeyConstraint("tenant_id", "trace_id", "policy", name="pk_trace_policy_stats"),
 )

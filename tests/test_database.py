@@ -26,8 +26,6 @@ DOMAIN_TABLES = {
     "segments",
     "spans",
     "trace_labels",
-    "trace_policy_stats",
-    "trace_state",
     "traces",
 }
 

@@ -137,24 +137,6 @@ def upgrade() -> None:
         batch_op.create_index("ix_trace_labels_lookup", ["tenant_id", "key", "value"], unique=False)
 
     op.create_table(
-        "trace_policy_stats",
-        sa.Column("tenant_id", sa.String(length=64), nullable=False),
-        sa.Column("trace_id", sa.String(length=32), nullable=False),
-        sa.Column("policy", sa.String(length=64), nullable=False),
-        sa.Column("stats", sa.JSON(), nullable=False),
-        sa.PrimaryKeyConstraint("tenant_id", "trace_id", "policy", name="pk_trace_policy_stats"),
-    )
-    op.create_table(
-        "trace_state",
-        sa.Column("tenant_id", sa.String(length=64), nullable=False),
-        sa.Column("trace_id", sa.String(length=32), nullable=False),
-        sa.Column("step_count", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("window", sa.JSON(), nullable=False),
-        sa.Column("velocity_micros_per_step", sa.Float(), server_default="0", nullable=False),
-        sa.Column("last_ts", sa.Float(), nullable=True),
-        sa.PrimaryKeyConstraint("tenant_id", "trace_id", name="pk_trace_state"),
-    )
-    op.create_table(
         "traces",
         sa.Column("tenant_id", sa.String(length=64), nullable=False),
         sa.Column("trace_id", sa.String(length=32), nullable=False),
@@ -174,8 +156,6 @@ def downgrade() -> None:
         batch_op.drop_index("ix_traces_tenant_started")
 
     op.drop_table("traces")
-    op.drop_table("trace_state")
-    op.drop_table("trace_policy_stats")
     with op.batch_alter_table("trace_labels", schema=None) as batch_op:
         batch_op.drop_index("ix_trace_labels_lookup")
 

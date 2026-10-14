@@ -48,6 +48,7 @@ Do not write one for routine changes: a bug fix, a rename, a small refactor.
 | [0006](0006-a-halt-is-a-trace-attribute.md) | A halt is an attribute of the trace, not a table | Accepted |
 | [0007](0007-ledger-events-are-not-deduplicated.md) | Ledger events are not deduplicated | Accepted |
 | [0008](0008-spend-and-in-flight-stay-ledger-tables.md) | Spend and in-flight counts stay as ledger tables | Accepted |
+| [0009](0009-no-step-window-or-policy-statistics.md) | The plane stores no step window or per-policy statistics | Accepted |
 
 Related repositories: [chronicle](https://github.com/theagentplane/chronicle), [primitives](https://github.com/theagentplane/primitives),
 [control-plane](https://github.com/theagentplane/control-plane), [tokenops](https://github.com/theagentplane/tokenops).

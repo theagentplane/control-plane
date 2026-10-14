@@ -21,8 +21,6 @@ from control_plane.db.tables import (
     ledger_spent,
     spans,
     trace_labels,
-    trace_policy_stats,
-    trace_state,
     traces,
 )
 from control_plane.repositories.upsert_utils import upsert
@@ -324,8 +322,6 @@ class TraceRepository:
                     envelopes,
                     spans,
                     trace_labels,
-                    trace_state,
-                    trace_policy_stats,
                     traces,
                 ):
                     conn.execute(

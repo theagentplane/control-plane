@@ -50,6 +50,9 @@ is, TokenOps 0.4 cannot talk to this service.
   PR-size notice, `mypy --strict`.
 
 ### Removed (breaking)
+- **`step` ledger events, `window` in `precheck`, `state` and `policy_stats` on
+  `GET /v1/ledger/traces/{id}`, and the `steps` field of the run list** (tables `trace_state`
+  and `trace_policy_stats`). The run list carries `span_count` instead. ADR 0009.
 - **Run registration and run records:** `POST /v1/runs`, `GET /v1/runs/{id}/registration`,
   `PUT`, `PATCH` and `GET /v1/run-records*`, and the `runs` and `run_registrations` tables. They
   duplicated what a Chronicle trace is. *Migration:* put the run's identity in trace labels at
@@ -65,8 +68,7 @@ is, TokenOps 0.4 cannot talk to this service.
 
 ### Database
 - Baseline revision `0001`: `traces`, `trace_labels`, `spans`, `envelopes`, `segments`, `budgets`,
-  `policy_instances`, `ledger_spent`, `ledger_inflight`, `trace_state`, `trace_policy_stats`,
-  `api_keys`. A halt is stored in `traces.attributes` (the primitives `Trace.attributes` dict,
+  `policy_instances`, `ledger_spent`, `ledger_inflight`, `api_keys`. A halt is stored in `traces.attributes` (the primitives `Trace.attributes` dict,
   ADR 0006); there is no halt table and no event deduplication table (ADR 0007).
 
 ## [0.2.2] — 2026-09-19 — persist compaction token savings (#18)
