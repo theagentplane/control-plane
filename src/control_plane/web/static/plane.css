@@ -393,6 +393,7 @@ td.mono, .mono { font-family: var(--mono); font-size: 12.5px; }
 .wf-db { background: #e3d7f5; border-left: 4px solid #7a5bb8; }
 .wf-poll { background: #f7ebc4; border-left: 4px solid #c9a227; }
 .wf-span { background: #e4e8ee; border-left: 4px solid #6b7580; }
+.wf-err { background: #fbdcdc; border-left: 4px solid #d1453b; }
 [data-theme="dark"] .wf-bar { color: var(--text); }
 [data-theme="dark"] .wf-llm { background: rgba(88, 139, 255, 0.22); border-left-color: #588bff; }
 [data-theme="dark"] .wf-tool { background: rgba(63, 185, 80, 0.18); border-left-color: #3fb950; }
@@ -400,6 +401,7 @@ td.mono, .mono { font-family: var(--mono); font-size: 12.5px; }
 [data-theme="dark"] .wf-auth { background: rgba(248, 81, 73, 0.16); border-left-color: #f85149; }
 [data-theme="dark"] .wf-db { background: rgba(163, 113, 247, 0.2); border-left-color: #a371f7; }
 [data-theme="dark"] .wf-poll { background: rgba(210, 153, 34, 0.2); border-left-color: #d29922; }
+[data-theme="dark"] .wf-err { background: rgba(248, 81, 73, 0.2); border-left-color: #f85149; }
 [data-theme="dark"] .wf-span { background: rgba(139, 148, 158, 0.18); border-left-color: #8b949e; }
 
 .banner {
@@ -435,3 +437,6 @@ td.mono, .mono { font-family: var(--mono); font-size: 12.5px; }
   .nav-links { gap: 12px; font-size: 12px; }
   .logo-sub { display: none; }
 }
+
+.wf-row.clickable { cursor: pointer; }
+#c-detail pre { max-height: 320px; overflow: auto; font-size: 12px; }

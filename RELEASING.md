@@ -44,14 +44,14 @@ No secrets needed — OIDC uses `permissions: id-token: write` in `release.yml`.
 
 1. Move the `CHANGELOG.md` `[Unreleased]` items under a new version heading with
    today's date; start a fresh empty `[Unreleased]`.
-2. Bump `version` in `pyproject.toml` **and** `__version__` in
-   `control_plane/__init__.py` following SemVer. Commit and merge to `main`.
+2. Bump `__version__` in `src/control_plane/_version.py` (the only place the version lives)
+   following SemVer. Commit and merge to `main`.
 3. In GitHub: **Actions → Release → Run workflow**
    - Branch: `main` (the commit that has the version bump)
-   - Tag (optional): e.g. `v0.1.0` — leave empty to use `v{version}` from
-     `pyproject.toml`
+   - Tag (optional): e.g. `v1.0.0` — leave empty to use `v{version}` from
+     `_version.py`
 4. The workflow will, in one run:
-   1. Require the tag to match `pyproject.toml` and `__version__`
+   1. Require the tag to match `_version.py`
    2. Build sdist/wheel and `twine check`
    3. Create and push the git tag
    4. Create the GitHub Release (attaches dist artifacts)
@@ -65,19 +65,16 @@ No secrets needed — OIDC uses `permissions: id-token: write` in `release.yml`.
 
 ## Version matching (why the workflow checks)
 
-PyPI versions are **immutable** and come from metadata inside the built wheel —
-that metadata is read from `pyproject.toml` at build time. The git tag
-(`v0.1.0`) is only a label; it does **not** set the package version.
-
-If you passed tag `v0.1.1` but `pyproject.toml` still says `0.1.0`, the workflow
-refuses to continue. Empty tag input defaults to `v` + the pyproject version.
-
-Also keep `control_plane.__version__` in sync so runtime version matches pip.
+PyPI versions are **immutable** and come from the version file inside the built wheel. The git tag
+(`v1.0.0`) is only a label; it does **not** set the package version. If you passed a tag that does
+not match `_version.py`, the workflow refuses to continue. Empty tag input defaults to `v` plus the
+version file.
 
 ## Versioning notes
 
-- Stay in `0.x` while the HTTP contract may still change.
-- Install name: `agentplane-control-plane`. Import name: `control_plane`.
-  CLI: `control-plane`.
-- Do not create tags or GitHub Releases by hand for normal cuts — use
-  **Run workflow** so tag, Release, and PyPI stay in lockstep.
+- SemVer from 1.0: a breaking change to the HTTP API, a setting or a table is a new major.
+- A database schema change ships as a new Alembic revision in the same release; never edit an
+  applied revision. The wheel is checked in CI to contain the migrations.
+- Install name: `agentplane-control-plane`. Import name: `control_plane`. CLI: `control-plane`.
+- Do not create tags or GitHub Releases by hand for normal cuts: use **Run workflow** so the tag,
+  the Release and PyPI stay in lockstep.

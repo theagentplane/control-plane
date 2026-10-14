@@ -11,14 +11,15 @@ WORKDIR /app
 # [tool.hatch.build.targets.wheel] / force-include) — keeps the build context and
 # image small, and cache-friendly (dependency layer doesn't invalidate on doc edits).
 COPY pyproject.toml README.md LICENSE ./
-COPY config ./config
-COPY control_plane ./control_plane
+COPY src ./src
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
-# SQLite lives on a volume so it survives `docker compose down` / image upgrades.
-ENV CONTROL_PLANE_DB=/data/control_plane.db
+# The database is chosen by one SQLAlchemy URL. The default is a SQLite file on a volume so it
+# survives `docker compose down` / image upgrades; point CONTROL_PLANE_DATABASE_URL at another
+# database to use that instead. The schema is created and upgraded by Alembic at startup.
+ENV CONTROL_PLANE_DATABASE_URL=sqlite:////data/control_plane.db
 VOLUME ["/data"]
 
 # Least privilege: the process only ever needs to read/write /data.

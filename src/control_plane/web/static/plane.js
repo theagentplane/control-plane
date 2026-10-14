@@ -18,9 +18,9 @@ async function api(path, opts = {}) {
 
 function pill(status) {
   const s = (status || "").toLowerCase();
-  const cls = s === "halted" || s === "error" || s === "throttled" ? "bad"
-    : s === "completed" ? "ok" : "warn";
-  return `<span class="pill ${cls}">${status || "—"}</span>`;
+  const cls = ["halted", "error", "throttled", "failure"].includes(s) ? "bad"
+    : ["completed", "closed", "success"].includes(s) ? "ok" : "warn";
+  return `<span class="pill ${cls}">${esc(status || "—")}</span>`;
 }
 
 function hashParts() {
@@ -54,11 +54,7 @@ function fmtTime(value) {
   });
 }
 
-function traceRecency(t) {
-  const raw = t.ended_at || t.started_at || "";
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? 0 : ms;
-}
+
 
 async function renderAdmin() {
   const el = $("#view-admin");
@@ -137,7 +133,7 @@ async function renderChronicle() {
   }
   el.innerHTML = `<div class="eyebrow">Chronicle</div><h1>Traces</h1><p class="sub">Newest first. Click a row for the waterfall.</p>
     <div class="row">
-      <input id="c-q" placeholder="Filter by trace id or dims" style="flex:1" />
+      <input id="c-q" placeholder="Filter by trace id, name or label" style="flex:1" />
       <input id="c-session" placeholder="session_id" />
       <button class="btn" id="c-search">Filter</button>
     </div>
@@ -150,21 +146,23 @@ async function renderChronicle() {
     if (session_id) params.set("session_id", session_id);
     try {
       const data = await api("/v1/traces?" + params.toString());
-      const traces = (data.traces || []).slice().sort((a, b) => traceRecency(b) - traceRecency(a));
+      const traces = data.traces || [];
       $("#c-list").innerHTML = `<div class="card"><h2>${traces.length} traces · recent first</h2>
-        <table><thead><tr><th>When</th><th>Trace</th><th>Spans</th><th>Dims</th></tr></thead><tbody>
-        ${traces.map((t) => `<tr class="clickable" data-tr="${t.trace_id}">
+        <table><thead><tr><th>When</th><th>Trace</th><th>Name</th><th>State</th><th>Spans</th><th>Labels</th></tr></thead><tbody>
+        ${traces.map((t) => `<tr class="clickable" data-tr="${esc(t.trace_id)}">
           <td>${fmtTime(t.ended_at || t.started_at)}</td>
-          <td class="mono">${t.trace_id}</td>
+          <td class="mono">${esc(t.trace_id)}</td>
+          <td>${esc(t.name || "")}</td>
+          <td>${pill(t.state)}</td>
           <td>${t.span_count ?? "—"}</td>
-          <td class="mono">${JSON.stringify(t.dims || {})}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No traces yet. Run an agent with Chronicle RemoteStore pointed here.</td></tr>`}
+          <td class="mono">${esc(JSON.stringify(t.metadata || {}))}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No traces yet. Run an agent with Chronicle 1.0 pointed at this plane.</td></tr>`}
         </tbody></table></div>`;
       el.querySelectorAll("[data-tr]").forEach((row) => {
         row.onclick = () => { location.hash = "chronicle/" + encodeURIComponent(row.dataset.tr); };
       });
     } catch (err) {
-      $("#c-list").innerHTML = `<p class="err">${err.message}</p>`;
+      $("#c-list").innerHTML = `<p class="err">${esc(err.message)}</p>`;
     }
   };
   $("#c-search").onclick = search;
@@ -195,21 +193,23 @@ function fmtDur(ms) {
 }
 
 function spanTone(env) {
-  const kind = String(env.boundary_kind || env.kind || "").toLowerCase();
-  const name = String(env.node_id || env.name || "").toLowerCase();
-  if (kind === "llm" || name.includes("llm") || name.includes("chat") || name.includes("openai") || name.includes("anthropic")) return "llm";
-  if (kind === "tool" || name.includes("tool")) return "tool";
-  if (name.includes("auth")) return "auth";
-  if (name.includes("db") || name.includes("sql") || name.includes("store")) return "db";
-  if (name.includes("poll")) return "poll";
-  if (name.includes("pay") || name.includes("search") || name.includes("dispatch")) return "work";
+  if (env.envelope_status && env.envelope_status.status === "failure") return "err";
+  const kind = String(env.kind || "").toLowerCase();
+  if (kind === "llm") return "llm";
+  if (kind === "tool") return String(env.name || "").startsWith("http ") ? "work" : "tool";
   return "span";
 }
 
 function spanInterval(env) {
-  const end = parseMs(env.timestamp) ?? parseMs(env.ended_at);
-  const start = parseMs(env.started_at) ?? end;
+  const status = env.envelope_status || {};
+  const end = parseMs(status.ended_at);
+  const start = parseMs(status.started_at) ?? end;
   return { start, end };
+}
+
+function seqOf(env) {
+  const value = (env.metadata || {})["chronicle.sequence"];
+  return typeof value === "number" ? value : 0;
 }
 
 function buildWaterfallRows(envs) {
@@ -229,7 +229,7 @@ function buildWaterfallRows(envs) {
   const sortSibs = (list) => list.sort((a, b) => {
     const ia = spanInterval(a);
     const ib = spanInterval(b);
-    return (ia.start ?? 0) - (ib.start ?? 0) || (a.sequence ?? 0) - (b.sequence ?? 0);
+    return (ia.start ?? 0) - (ib.start ?? 0) || seqOf(a) - seqOf(b);
   });
   sortSibs(roots);
   children.forEach((list) => sortSibs(list));
@@ -288,14 +288,50 @@ function buildWaterfallRows(envs) {
   return { rows, total, t0, t1 };
 }
 
+function section(title, value) {
+  if (value === undefined || value === null) return "";
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return `<details open><summary>${esc(title)}</summary><pre class="mono">${esc(text)}</pre></details>`;
+}
+
+function envelopeDetail(env) {
+  const status = env.envelope_status || {};
+  const out = env.output || {};
+  const error = out.error
+    ? `<p class="err">${esc(out.error.type)}: ${esc(out.error.message)}</p>`
+    : "";
+  const usage = out.usage ? section("Usage", out.usage) : "";
+  return `<div class="card" id="c-detail">
+    <h2>${esc(env.name)} <span class="pill">${esc(env.kind)}</span> ${pill(status.status || status.state)}</h2>
+    <p class="hint mono">${esc(env.envelope_id)} · span ${esc(env.span_id)}${
+      env.parent_envelope_id ? " · parent " + esc(env.parent_envelope_id) : ""} · attempt ${esc(env.attempt || 1)}</p>
+    ${error}
+    ${out.provider ? `<p class="hint">${esc(out.provider)} · ${esc(out.model || "")} (${esc(out.model_source || "")})</p>` : ""}
+    ${usage}
+    ${section("Input", env.input)}
+    ${section("Output", env.output)}
+    ${section("Metadata", env.metadata)}
+  </div>`;
+}
+
 async function showWaterfall(traceId) {
   const box = $("#c-water");
   box.innerHTML = "Loading waterfall…";
   try {
-    const data = await api("/v1/traces/" + encodeURIComponent(traceId) + "/envelopes");
+    const [trace, data] = await Promise.all([
+      api("/v1/traces/" + encodeURIComponent(traceId)),
+      api("/v1/traces/" + encodeURIComponent(traceId) + "/envelopes"),
+    ]);
     const envs = data.envelopes || [];
+    const spans = (trace.spans || []).map((sp) => `<tr>
+      <td class="mono">${esc(sp.span_id)}</td><td>${esc(sp.service)}</td><td>${pill(sp.status || sp.state)}</td>
+      <td class="mono">${esc(sp.parent_envelope_id || "—")}</td></tr>`).join("");
+    const head = `<div class="card"><h2>${esc(trace.name || traceId)} ${pill(trace.state)}</h2>
+      <p class="hint mono">${esc(traceId)} · ${esc(JSON.stringify(trace.metadata || {}))}</p>
+      <table><thead><tr><th>Span</th><th>Service</th><th>Status</th><th>Called by envelope</th></tr></thead>
+      <tbody>${spans || `<tr><td colspan="4">No spans</td></tr>`}</tbody></table></div>`;
     if (!envs.length) {
-      box.innerHTML = `<div class="card"><h2>Waterfall · ${esc(traceId)}</h2><p class="hint">No spans in this trace.</p></div>`;
+      box.innerHTML = head + `<div class="card"><p class="hint">No envelopes in this trace.</p></div>`;
       return;
     }
     const { rows, total } = buildWaterfallRows(envs);
@@ -303,10 +339,9 @@ async function showWaterfall(traceId) {
       `<span class="wf-tick" style="left:${p * 100}%">${esc(fmtDur(total * p))}</span>`
     )).join("");
     const body = rows.map(({ env, depth, left, width, dur }) => {
-      const name = env.node_id || env.name || env.envelope_id;
-      const kind = env.boundary_kind || "";
-      const title = `${name}${kind ? " · " + kind : ""} · ${fmtDur(dur)} · ${env.envelope_id}`;
-      return `<div class="wf-row" style="padding-left:${12 + depth * 18}px">
+      const name = env.name || env.envelope_id;
+      const title = `${name} · ${env.kind || ""} · ${fmtDur(dur)} · ${env.envelope_id}`;
+      return `<div class="wf-row clickable" data-env="${esc(env.envelope_id)}" style="padding-left:${12 + depth * 18}px">
         <div class="wf-track">
           <div class="wf-bar wf-${spanTone(env)}" style="left:${left}%;width:${width}%" title="${esc(title)}">
             <span class="wf-bar-label">${esc(name)}</span>
@@ -314,35 +349,41 @@ async function showWaterfall(traceId) {
         </div>
       </div>`;
     }).join("");
-    box.innerHTML = `<div class="card wf-card">
-      <h2>Waterfall · ${esc(traceId)}</h2>
-      <p class="hint">${envs.length} spans · ${esc(fmtDur(total))}</p>
+    box.innerHTML = head + `<div class="card wf-card">
+      <h2>Waterfall</h2>
+      <p class="hint">${envs.length} envelopes · ${esc(fmtDur(total))} · click a bar for its sections</p>
       <div class="wf">
         <div class="wf-axis">${ticks}</div>
         ${body}
       </div>
-    </div>`;
+    </div><div id="c-detail-box"></div>`;
+    const byId = new Map(envs.map((e) => [e.envelope_id, e]));
+    box.querySelectorAll("[data-env]").forEach((row) => {
+      row.onclick = () => {
+        $("#c-detail-box").innerHTML = envelopeDetail(byId.get(row.dataset.env));
+      };
+    });
   } catch (err) {
-    box.innerHTML = `<p class="err">${err.message}</p>`;
+    box.innerHTML = `<p class="err">${esc(err.message)}</p>`;
   }
 }
 
 async function renderTokenops() {
   const el = $("#view-tokenops");
-  el.innerHTML = `<div class="eyebrow">TokenOps</div><h1>Governance</h1><p class="sub">Budgets and policies the sidecar pulls on each run. Breaching runs are those halted, throttled, or in error.</p>
+  el.innerHTML = `<div class="eyebrow">TokenOps</div><h1>Governance</h1><p class="sub">Budgets and policies the sidecar pulls on each run. A run is a Chronicle trace; breaches are the halted ones.</p>
     <div id="t-gov"></div>
     <div id="t-runs" style="margin-top:14px"></div>`;
   try {
     const [budgets, policies, runs, bad] = await Promise.all([
       api("/v1/budgets"),
       api("/v1/policies"),
-      api("/v1/run-records?limit=100"),
-      api("/v1/run-records?problematic_only=true&limit=50"),
+      api("/v1/ledger/traces?limit=100"),
+      api("/v1/ledger/traces?halted_only=true&limit=50"),
     ]);
     $("#t-gov").innerHTML = `<div class="grid cols-2">
       <div class="card"><h2>Budgets</h2>
         <table><thead><tr><th>Id</th><th>Limit USD</th><th>Dim</th></tr></thead><tbody>
-        ${(budgets || []).map((b) => `<tr><td class="mono">${b.id}</td><td>${b.limit_micros == null ? "∞" : (b.limit_micros / 1e6).toFixed(4)}</td><td>${b.dimension}</td></tr>`).join("")}
+        ${(budgets || []).map((b) => `<tr><td class="mono">${esc(b.id)}</td><td>${b.limit_micros == null ? "∞" : (b.limit_micros / 1e6).toFixed(4)}</td><td>${esc(b.dimension)}</td></tr>`).join("")}
         </tbody></table>
         <div class="row" style="margin-top:10px">
           <input id="b-id" placeholder="budget id" />
@@ -352,7 +393,7 @@ async function renderTokenops() {
       </div>
       <div class="card"><h2>Policies</h2>
         <table><thead><tr><th>Template</th><th>Budget</th><th>On</th></tr></thead><tbody>
-        ${(policies || []).map((p) => `<tr><td class="mono">${p.template}</td><td>${p.budget_id || "—"}</td><td>${p.enabled ? "yes" : "no"}</td></tr>`).join("")}
+        ${(policies || []).map((p) => `<tr><td class="mono">${esc(p.template)}</td><td>${esc(p.budget_id || "—")}</td><td>${p.enabled ? "yes" : "no"}</td></tr>`).join("")}
         </tbody></table>
       </div>
     </div>`;
@@ -363,22 +404,27 @@ async function renderTokenops() {
         body: JSON.stringify({
           id: $("#b-id").value.trim(),
           limit_micros: Number.isFinite(usd) ? Math.round(usd * 1e6) : null,
-          dimension: "run",
+          dimension: "trace",
         }),
       });
       renderTokenops();
     };
-    const list = (title, items) => `<div class="card"><h2>${title}</h2>
-      <table><thead><tr><th>Run</th><th>Agent</th><th>Status</th><th>Cost</th><th>Halt</th></tr></thead><tbody>
-      ${(items || []).map((r) => `<tr>
-        <td class="mono">${r.run_id}</td><td>${r.agent}</td><td>${pill(r.status)}</td>
-        <td>$${((r.cost_micros || 0) / 1e6).toFixed(4)}</td>
-        <td>${r.halt_reason || ""}</td>
-      </tr>`).join("") || `<tr><td colspan="5">None</td></tr>`}
+    const list = (title, data) => `<div class="card"><h2>${title}</h2>
+      <table><thead><tr><th>Trace</th><th>Name</th><th>State</th><th>Spent</th><th>Steps</th><th>Halt</th></tr></thead><tbody>
+      ${((data && data.traces) || []).map((r) => `<tr class="clickable" data-tr="${esc(r.trace_id)}">
+        <td class="mono">${esc(r.trace_id)}</td><td>${esc(r.name || "")}</td>
+        <td>${r.halted ? pill("halted") : pill(r.state)}</td>
+        <td>$${((r.spent_micros || 0) / 1e6).toFixed(4)}</td>
+        <td>${r.steps || 0}</td>
+        <td>${esc(r.halt_reason || "")}</td>
+      </tr>`).join("") || `<tr><td colspan="6">None</td></tr>`}
       </tbody></table></div>`;
     $("#t-runs").innerHTML = list("Breaches", bad) + `<div style="height:12px"></div>` + list("Recent runs", runs);
+    el.querySelectorAll("[data-tr]").forEach((row) => {
+      row.onclick = () => { location.hash = "chronicle/" + encodeURIComponent(row.dataset.tr); };
+    });
   } catch (err) {
-    $("#t-gov").innerHTML = `<p class="err">${err.message}</p>`;
+    $("#t-gov").innerHTML = `<p class="err">${esc(err.message)}</p>`;
   }
 }
 

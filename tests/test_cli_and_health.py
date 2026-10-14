@@ -133,3 +133,15 @@ def test_settings_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONTROL_PLANE_AUTO_MIGRATE", "maybe")
     with pytest.raises(ValueError, match="boolean"):
         load_settings()
+
+
+def test_the_web_page_is_served_and_speaks_only_the_current_api(make_client: Make) -> None:
+    client = make_client()
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "AgentPlane" in page.text
+    script = client.get("/static/plane.js").text
+    for removed in ("/v1/run-records", "/v1/runs", "boundary_kind", "node_id", ".dims", "run_id"):
+        assert removed not in script, f"plane.js still uses {removed}"
+    for used in ("/v1/ledger/traces", "/v1/traces", "envelope_status", "/v1/admin/keys"):
+        assert used in script
