@@ -12,7 +12,7 @@ is, TokenOps 0.4 cannot talk to this service.
 
 ### Changed (breaking)
 - **Chronicle speaks the `agentplane-primitives` schema** (new dependency,
-  `agentplane-primitives==0.1.*`). Traces, spans and envelopes are validated with the shared models
+  `agentplane-primitives==0.2.*`). Traces, spans and envelopes are validated with the shared models
   and served back as valid primitives. An envelope in the pre-1.0 Chronicle shape is rejected with
   `400`. *Migration:* upgrade to `agent-chronicle` 1.0.
 - **A run is a trace.** `run_id` is gone everywhere; `trace_id` is the only run identifier. Halts,

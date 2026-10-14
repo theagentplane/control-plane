@@ -11,7 +11,7 @@ may find it useful too.
 ## Source of truth
 
 - The entities (`Trace`, `Span`, `Envelope`, ids, enums) come from
-  [`agentplane-primitives`](https://github.com/theagentplane/primitives) (pinned `==0.1.*`).
+  [`agentplane-primitives`](https://github.com/theagentplane/primitives) (pinned `==0.2.*`).
   **Never define a local copy of an entity.** A gap there is an issue in that repository.
 - Chronicle's design is in
   [chronicle `docs/rfcs/chronicle-technical-design.md`](https://github.com/theagentplane/chronicle/blob/main/docs/rfcs/chronicle-technical-design.md),
