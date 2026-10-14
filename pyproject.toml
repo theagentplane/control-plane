@@ -34,6 +34,7 @@ classifiers = [
   "Topic :: System :: Systems Administration",
 ]
 dependencies = [
+  "agentplane-primitives==0.1.*",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pydantic>=2",

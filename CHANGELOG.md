@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+**Additive.** Pre-1.0 Chronicle clients and the TokenOps routes are unchanged. New tables and
+columns are created automatically.
+
+Added
+- **Chronicle 1.0 entities on the `agentplane-primitives` schema** (new dependency,
+  `agentplane-primitives==0.1.*`). Documented in [docs/chronicle-api.md](docs/chronicle-api.md):
+  - `POST /v1/traces`: idempotent trace registration, labels written once.
+  - `PUT /v1/traces/{trace_id}/spans/{span_id}`: span upsert at open and close; a closed span is
+    immutable.
+  - `GET /v1/traces/{trace_id}/spans/{span_id}/envelopes`: one span's envelopes in call order, for
+    replay.
+  - `POST /v1/envelopes:batch` validates primitives envelopes with the shared models (400 on the
+    whole batch if one is invalid) and treats an envelope as one record that is mutable until
+    closed. A body without `envelope_status` keeps the legacy path.
+  - `GET /v1/traces/{trace_id}` now also returns `name`, `metadata`, a derived `state` and the
+    trace's `spans`.
+- `spans` table; `span_id` and `state` columns on `envelopes`; `name` on `traces`.
+
 ## [0.2.2] — 2026-09-19 — persist compaction token savings (#18)
 
 **Additive on the wire and schema.** `0.2.0`/`0.2.1` clients keep working; a client that

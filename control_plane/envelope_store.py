@@ -6,6 +6,10 @@ import json
 import sqlite3
 from typing import Any
 
+from agentplane_primitives.models import Envelope, Span, Trace
+
+from control_plane import chronicle_entities as entities
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces (
   tenant_id TEXT NOT NULL,
@@ -55,9 +59,42 @@ class EnvelopeStore:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_SCHEMA)
         self._db.commit()
+        entities.migrate(self._db)
 
     def close(self) -> None:
         self._db.close()
+
+    # ---- primitives entities (Chronicle 1.0) ------------------------------------------
+
+    def upsert_trace(self, tenant_id: str, trace: Trace) -> tuple[bool, dict[str, Any]]:
+        """Register a trace (idempotent; labels are written once)."""
+        return entities.upsert_trace(self._db, tenant_id, trace)
+
+    def upsert_span(self, tenant_id: str, span: Span) -> bool:
+        """Create or update a span; False when the span was already closed."""
+        return entities.upsert_span(self._db, tenant_id, span)
+
+    def append_primitives(self, tenant_id: str, envelopes: list[Envelope]) -> dict[str, Any]:
+        """Write envelopes that were already validated by the caller."""
+        accepted = deduped = 0
+        for envelope in envelopes:
+            if entities.append_envelope(self._db, tenant_id, envelope):
+                accepted += 1
+            else:
+                deduped += 1
+        return {
+            "accepted": accepted,
+            "deduped": deduped,
+            "envelope_ids": [e.envelope_id for e in envelopes],
+        }
+
+    def list_span_envelopes(
+        self, tenant_id: str, trace_id: str, span_id: str
+    ) -> list[dict[str, Any]]:
+        return entities.list_span_envelopes(self._db, tenant_id, trace_id, span_id)
+
+    def list_trace_spans(self, tenant_id: str, trace_id: str) -> list[dict[str, Any]]:
+        return entities.list_trace_spans(self._db, tenant_id, trace_id)
 
     def append(self, tenant_id: str, body: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         """Insert one envelope. Returns (deduped, ack_meta)."""
@@ -160,9 +197,14 @@ class EnvelopeStore:
             "SELECT COUNT(*) AS n FROM envelopes WHERE tenant_id=? AND trace_id=?",
             (tenant_id, trace_id),
         ).fetchone()["n"]
+        spans = self.list_trace_spans(tenant_id, trace_id)
         return {
             "trace_id": row["trace_id"],
+            "name": row["name"],
             "dims": json.loads(row["dims"] or "{}"),
+            "metadata": json.loads(row["dims"] or "{}"),
+            "state": entities.trace_state(spans),
+            "spans": spans,
             "span_count": count,
             "started_at": row["started_at"],
             "ended_at": row["ended_at"],
