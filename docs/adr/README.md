@@ -44,7 +44,7 @@ Do not write one for routine changes: a bug fix, a rename, a small refactor.
 | [0002](0002-alembic-owns-the-schema.md) | Alembic owns the database schema | Accepted |
 | [0003](0003-database-neutral-service.md) | The service is not bound to one database | Accepted |
 | [0004](0004-a-run-is-a-trace.md) | A run is a Chronicle trace; there is no run table | Accepted |
-| [0005](0005-governance-is-pulled-from-the-database.md) | Governance configuration is stored here and pulled by the agent | Proposed |
+| [0005](0005-governance-is-pulled-from-the-database.md) | Governance configuration is stored here and pulled by the agent | Accepted |
 
 Related repositories: [chronicle](https://github.com/theagentplane/chronicle), [primitives](https://github.com/theagentplane/primitives),
 [control-plane](https://github.com/theagentplane/control-plane), [tokenops](https://github.com/theagentplane/tokenops).
