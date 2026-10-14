@@ -1,8 +1,10 @@
 """Governance tables: configuration TokenOps pulls, and the shared ledger it writes.
 
 Configuration (segments, budgets, policy instances) is what an agent running TokenOps fetches
-with ``GET /v1/governance/{agent}``. The ledger (spend and in-flight counts) is what agents share across processes. A run is a
-Chronicle trace, so everything per run is keyed by ``trace_id``; there is no separate run table.
+with ``GET /v1/governance/{agent}``. The ledger (spend and in-flight counts) is what agents share
+across processes. A run is a Chronicle trace, so everything per run is keyed by ``trace_id``;
+there is no separate run table. A halt is not a table: it is an attribute of the trace
+(``traces.attributes``).
 """
 
 from sqlalchemy import (
