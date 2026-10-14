@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-## [1.0.0] - unreleased
+## [Unreleased]
+
+## [1.0.0] - 2026-10-15
 
 A rework of the service around the shared primitives schema, with the database owned by Alembic.
 **This release is breaking** (the maintainer chose to drop the pre-1.0 surface rather than carry
