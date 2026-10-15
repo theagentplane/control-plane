@@ -8,9 +8,12 @@ recipe that stops the ``sqlite3`` driver from deciding when a transaction begins
 SQLAlchemy's transactions and SAVEPOINTs behave as they do on other databases.
 """
 
+from contextlib import AbstractContextManager
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Connection, Engine, create_engine, event
+
+_IMMEDIATE = "sqlite_begin_immediate"
 
 
 def create_db_engine(url: str) -> Engine:
@@ -19,6 +22,19 @@ def create_db_engine(url: str) -> Engine:
     if engine.dialect.name == "sqlite":
         _configure_sqlite(engine)
     return engine
+
+
+def write_transaction(engine: Engine) -> AbstractContextManager[Connection]:
+    """Open a transaction that is about to write: commit on success, roll back on error.
+
+    SQLite starts it with ``BEGIN IMMEDIATE`` so the write lock is taken up front and a competing
+    writer waits under ``busy_timeout``. A deferred transaction that reads first and then writes
+    fails at once with ``database is locked`` when another connection committed in between.
+    Other databases get a plain ``engine.begin()``; they lock rows and need no help.
+    """
+    if engine.dialect.name == "sqlite":
+        engine = engine.execution_options(**{_IMMEDIATE: True})
+    return engine.begin()
 
 
 def _configure_sqlite(engine: Engine) -> None:
@@ -34,4 +50,5 @@ def _configure_sqlite(engine: Engine) -> None:
 
     @event.listens_for(engine, "begin")
     def _on_begin(connection: Any) -> None:
-        connection.exec_driver_sql("BEGIN")
+        immediate = connection.get_execution_options().get(_IMMEDIATE, False)
+        connection.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")

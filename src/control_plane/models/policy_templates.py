@@ -16,5 +16,6 @@ POLICY_TEMPLATES: frozenset[str] = frozenset(
         "cost_guard",
         "context_compaction",
         "output_runaway",
+        "time_budget",
     }
 )

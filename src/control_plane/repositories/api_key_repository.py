@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import Engine, delete, func, select
 
 from control_plane.auth import ApiKeyView, hash_token
+from control_plane.db.engine_utils import write_transaction
 from control_plane.db.tables import api_keys
 from control_plane.time_utils import utc_now
 
@@ -30,7 +31,7 @@ class ApiKeyRepository:
         token = secret or secrets.token_urlsafe(24)
         key_id = f"key_{uuid.uuid4().hex[:8]}"
         created = utc_now()
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             conn.execute(
                 api_keys.insert().values(
                     id=key_id,
@@ -71,7 +72,7 @@ class ApiKeyRepository:
         return _view(row) if row else None
 
     def delete(self, key_id: str) -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             conn.execute(delete(api_keys).where(api_keys.c.id == key_id))
 
 
