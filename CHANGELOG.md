@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-## [Unreleased]
+### Added
+- `time_budget` is a known policy template, so configuration writes naming it are accepted.
+
+### Fixed
+- SQLite no longer answers `500` (`database is locked`) when Chronicle and ledger writers run at
+  the same time. Write transactions start with `BEGIN IMMEDIATE`, so writers queue under
+  `busy_timeout` instead of failing at their first write (#28).
 
 ## [1.0.0] - 2026-10-15
 

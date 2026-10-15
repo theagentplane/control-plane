@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import Engine, and_, delete, select
 
+from control_plane.db.engine_utils import write_transaction
 from control_plane.db.tables import budgets, policy_instances, segments
 from control_plane.models import POLICY_TEMPLATES, BudgetSpec, PolicyInstance, Segment
 from control_plane.repositories.upsert_utils import upsert
@@ -22,7 +23,7 @@ class GovernanceRepository:
     # ---- segments ----------------------------------------------------------------------
 
     def upsert_segment(self, tenant_id: str, seg: Segment) -> Segment:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             upsert(
                 conn,
                 segments,
@@ -53,7 +54,7 @@ class GovernanceRepository:
         return [_segment(r) for r in rows]
 
     def delete_segment(self, tenant_id: str, sid: str) -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             conn.execute(
                 delete(segments).where(
                     and_(segments.c.tenant_id == tenant_id, segments.c.id == sid)
@@ -63,7 +64,7 @@ class GovernanceRepository:
     # ---- budgets -----------------------------------------------------------------------
 
     def upsert_budget(self, tenant_id: str, spec: BudgetSpec) -> BudgetSpec:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             upsert(
                 conn,
                 budgets,
@@ -92,7 +93,7 @@ class GovernanceRepository:
         return [_budget(r) for r in rows]
 
     def delete_budget(self, tenant_id: str, bid: str) -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             conn.execute(
                 delete(budgets).where(and_(budgets.c.tenant_id == tenant_id, budgets.c.id == bid))
             )
@@ -104,7 +105,7 @@ class GovernanceRepository:
             raise ValueError(
                 f"unknown policy template {pi.template!r}; known: {sorted(POLICY_TEMPLATES)}"
             )
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             upsert(
                 conn,
                 policy_instances,
@@ -140,7 +141,7 @@ class GovernanceRepository:
         return [_policy(r) for r in rows]
 
     def delete_policy(self, tenant_id: str, pid: str) -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             conn.execute(
                 delete(policy_instances).where(
                     and_(policy_instances.c.tenant_id == tenant_id, policy_instances.c.id == pid)
@@ -149,7 +150,7 @@ class GovernanceRepository:
 
     def clear(self, tenant_id: str) -> None:
         """Delete this tenant's segments, budgets and policy instances (the ledger is kept)."""
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             for table in (policy_instances, budgets, segments):
                 conn.execute(delete(table).where(table.c.tenant_id == tenant_id))
 

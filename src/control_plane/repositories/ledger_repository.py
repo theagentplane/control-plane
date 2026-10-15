@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, and_, case, func, select
 
+from control_plane.db.engine_utils import write_transaction
 from control_plane.db.tables import (
     ledger_inflight,
     ledger_spent,
@@ -47,7 +48,7 @@ class LedgerRepository:
         accepted = 0
         touched: set[tuple[str, str, str]] = set()
         traces_seen: set[str] = set()
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             for index, event in enumerate(events):
                 kind = event.get("kind")
                 if not isinstance(kind, str):
@@ -123,11 +124,11 @@ class LedgerRepository:
     # ---- halts -------------------------------------------------------------------------
 
     def mark_halted(self, tenant_id: str, trace_id: str, reason: str = "") -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             _set_halt(conn, tenant_id, trace_id, reason)
 
     def clear_halt(self, tenant_id: str, trace_id: str) -> None:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             _clear_halt(conn, tenant_id, trace_id)
 
     def halt_status(self, tenant_id: str, trace_id: str) -> tuple[bool, str | None]:

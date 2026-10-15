@@ -12,6 +12,7 @@ from agentplane_primitives.enums import State
 from agentplane_primitives.models import Envelope
 from sqlalchemy import Engine, and_, select
 
+from control_plane.db.engine_utils import write_transaction
 from control_plane.db.tables import envelopes
 from control_plane.repositories.trace_repository import ensure_trace, widen_trace
 from control_plane.repositories.upsert_utils import upsert
@@ -28,7 +29,7 @@ class EnvelopeRepository:
     def append(self, tenant_id: str, batch: list[Envelope]) -> dict[str, Any]:
         """Store ``batch``. Returns ``accepted``, ``deduped`` and the envelope ids."""
         accepted = deduped = 0
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             for envelope in batch:
                 key = {
                     "tenant_id": tenant_id,

@@ -16,6 +16,7 @@ from agentplane_primitives.models import Span, Trace
 from sqlalchemy import Connection, Engine, Select, and_, case, delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from control_plane.db.engine_utils import write_transaction
 from control_plane.db.tables import (
     envelopes,
     ledger_spent,
@@ -120,7 +121,7 @@ class TraceRepository:
             return self._register(tenant_id, trace)
 
     def _register(self, tenant_id: str, trace: Trace) -> tuple[bool, dict[str, Any]]:
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             row = conn.execute(
                 select(traces).where(
                     and_(traces.c.tenant_id == tenant_id, traces.c.trace_id == trace.trace_id)
@@ -167,7 +168,7 @@ class TraceRepository:
 
     def upsert_span(self, tenant_id: str, span: Span) -> bool:
         """Create or update a span. Returns False if it was already closed (a no-op)."""
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             existing = conn.execute(
                 select(spans.c.state).where(
                     and_(
@@ -315,7 +316,7 @@ class TraceRepository:
         if tenant_id is not None:
             pick = pick.where(traces.c.tenant_id == tenant_id)
         removed = 0
-        with self._engine.begin() as conn:
+        with write_transaction(self._engine) as conn:
             for row in conn.execute(pick).all():
                 key = {"tenant_id": row.tenant_id, "trace_id": row.trace_id}
                 for table in (
