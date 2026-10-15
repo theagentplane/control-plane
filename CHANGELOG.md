@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-15
+
 ### Added
 - `time_budget` is a known policy template, so configuration writes naming it are accepted.
 
