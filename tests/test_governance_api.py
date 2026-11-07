@@ -151,3 +151,14 @@ def test_reseed_and_clear(make_client: Make) -> None:
     assert client.get("/v1/policies").json() == []
     assert client.post("/v1/admin/governance/reseed").json()["written"] > 0
     assert client.get("/v1/policies").json() != []
+
+
+def test_every_known_policy_template_is_accepted(make_client: Make) -> None:
+    from control_plane.models.policy_templates import POLICY_TEMPLATES
+
+    client = make_client()
+    assert "tool_output_prune" in POLICY_TEMPLATES
+    for name in sorted(POLICY_TEMPLATES):
+        response = client.put("/v1/policies", json={"id": f"t-{name}", "template": name})
+        assert response.status_code == 200, (name, response.text)
+    assert client.put("/v1/policies", json={"id": "bad", "template": "nope"}).status_code == 400
