@@ -158,6 +158,7 @@ def test_every_known_policy_template_is_accepted(make_client: Make) -> None:
 
     client = make_client()
     assert "tool_output_prune" in POLICY_TEMPLATES
+    assert "budget_pace" in POLICY_TEMPLATES
     for name in sorted(POLICY_TEMPLATES):
         response = client.put("/v1/policies", json={"id": f"t-{name}", "template": name})
         assert response.status_code == 200, (name, response.text)

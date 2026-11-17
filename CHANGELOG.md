@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- `budget_pace` is a known policy template, so configuration writes naming it are accepted
+  (compatible).
+
 ## [1.0.2] - 2026-11-07
 
 ### Added
