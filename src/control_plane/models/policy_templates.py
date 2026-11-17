@@ -18,5 +18,6 @@ POLICY_TEMPLATES: frozenset[str] = frozenset(
         "output_runaway",
         "time_budget",
         "tool_output_prune",
+        "budget_pace",
     }
 )
